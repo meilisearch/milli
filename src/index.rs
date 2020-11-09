@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Context;
@@ -206,6 +207,64 @@ impl Index {
         }
 
         Ok(documents)
+    }
+
+    /// Returns a [`Vec`] of at most `limit` documents that are similar to the given document.
+    ///
+    /// Similarity is based on the frequency of the words in the document, the less frequent words
+    /// of the documents are retrieved and the documents containing a maximum of them are returned.
+    pub fn similar_documents<'t>(
+        &self,
+        rtxn: &'t RoTxn,
+        id: DocumentId,
+        limit: usize,
+    ) -> anyhow::Result<Vec<DocumentId>>
+    {
+        // We store the frequency along with the docids associated with the word
+        // from the most to the least frequent that is present in the document.
+        let mut frequencies_words = BTreeMap::new();
+        for result in self.docid_word_positions.prefix_iter(rtxn, &(id, ""))? {
+            let ((_docid, word), _pos) = result?;
+            if let Some(docids) = self.word_docids.get(rtxn, word)? {
+                frequencies_words.insert(docids.len(), word);
+            }
+        }
+
+        // Create an iterator that will be consumed by the next two iterations loops.
+        let mut frequencies_words_iter = frequencies_words.into_iter();
+
+        // We first accumulate enough documents to work with, this help in the case
+        // the least common word does only appear in the given document.
+        let mut base = RoaringBitmap::new();
+        while let Some((_frequency, word)) = frequencies_words_iter.next() {
+            let docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+            base.union_with(&docids);
+            if base.len() >= limit as u64 { break }
+        }
+
+        // We take the least common words and try to intersect them the more possible until
+        // you don't find enough of them to satisfy the limit. At this point you return the
+        // current and previous intersections.
+        let mut tmp = base;
+        let mut previous_tmp = RoaringBitmap::new();
+        while let Some((_frequency, word)) = frequencies_words_iter.next() {
+            let docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+            previous_tmp = tmp.clone();
+            tmp.intersect_with(&docids);
+            if tmp.len() <= limit as u64 { break }
+        }
+
+        // We remove the tmp documents from the previous_tmp documents.
+        previous_tmp.difference_with(&tmp);
+
+        // We also make sure we do not return the original docids.
+        let similar_documents = tmp.iter()
+            .chain(previous_tmp)
+            .filter(|&i| i != id)
+            .take(limit)
+            .collect();
+
+        Ok(similar_documents)
     }
 
     /// Returns the number of documents indexed in the database.
