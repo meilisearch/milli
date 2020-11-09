@@ -527,11 +527,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let disable_highlighting = opt.disable_highlighting;
+    let index_cloned = index.clone();
     let query_route = warp::filters::method::post()
         .and(warp::path!("query"))
         .and(warp::body::json())
         .map(move |query: QueryBody| {
             let before_search = Instant::now();
+            let index = index_cloned.clone();
             let rtxn = index.read_txn().unwrap();
 
             let mut search = index.search(&rtxn);
@@ -558,6 +560,42 @@ async fn main() -> anyhow::Result<()> {
                     highlight_record(&mut object, &found_words, &attributes_to_highlight);
                 }
 
+                documents.push(object);
+            }
+
+            Response::builder()
+                .header("Content-Type", "application/json")
+                .header("Time-Ms", before_search.elapsed().as_millis().to_string())
+                .body(serde_json::to_string(&documents).unwrap())
+        });
+
+    #[derive(Deserialize)]
+    struct SimilarDocuments {
+        limit: Option<usize>,
+    }
+
+    let similar_route = warp::filters::method::get()
+        .and(warp::path!("similar-documents" / String))
+        .and(warp::filters::query::query())
+        .map(move |id: String, similar_documents: SimilarDocuments| {
+            let before_search = Instant::now();
+            let rtxn = index.read_txn().unwrap();
+
+            let users_ids_documents_ids = index.users_ids_documents_ids(&rtxn).unwrap();
+            let document_id = users_ids_documents_ids.get(id).unwrap() as u32;
+
+            let limit = similar_documents.limit.unwrap_or(20);
+            let documents_ids = index.similar_documents(&rtxn, document_id, limit).unwrap();
+
+            let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
+            let displayed_fields = match index.displayed_fields(&rtxn).unwrap() {
+                Some(fields) => Cow::Borrowed(fields),
+                None => Cow::Owned(fields_ids_map.iter().map(|(id, _)| id).collect()),
+            };
+
+            let mut documents = Vec::new();
+            for (_id, obkv) in index.documents(&rtxn, documents_ids).unwrap() {
+                let object = obkv_to_json(&displayed_fields, &fields_ids_map, obkv).unwrap();
                 documents.push(object);
             }
 
@@ -730,6 +768,7 @@ async fn main() -> anyhow::Result<()> {
         .or(dash_logo_white_route)
         .or(dash_logo_black_route)
         .or(query_route)
+        .or(similar_route)
         .or(indexing_csv_route)
         .or(indexing_json_route)
         .or(indexing_json_stream_route)
