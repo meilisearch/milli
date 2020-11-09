@@ -276,3 +276,46 @@ impl Index {
         Search::new(rtxn, self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heed::EnvOpenOptions;
+    use crate::update::{IndexDocuments, UpdateFormat};
+
+    #[test]
+    fn similar_documents() {
+        let path = tempfile::tempdir().unwrap();
+        let mut options = EnvOpenOptions::new();
+        options.map_size(10 * 1024 * 1024); // 10 MB
+        let index = Index::new(options, &path).unwrap();
+
+        // First we send 3 documents with an id for only one of them.
+        let mut wtxn = index.write_txn().unwrap();
+        let content = &br#"[
+            { "id": 0, "text": "kevin is cool but friend with benoit" },
+            { "id": 1, "text": "kevina is dumb" },
+            { "id": 2, "text": "bernard is dumb" },
+            { "id": 3, "text": "christophe is dumb" },
+            { "id": 4, "text": "benoit is also dumb" },
+            { "id": 5, "text": "jacques is friend with benoit" }
+        ]"#[..];
+        let mut builder = IndexDocuments::new(&mut wtxn, &index);
+        builder.update_format(UpdateFormat::Json);
+        builder.execute(content, |_, _| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        // Check that there is 3 documents now.
+        let rtxn = index.read_txn().unwrap();
+
+        // "dumb" word in common
+        let similar_ids = index.similar_documents(&rtxn, 1, 3 /* limit */).unwrap();
+        assert_eq!(similar_ids, vec![2, 3, 4]); // they all contain "dumb"
+
+        // "friend" and "benoit" in common
+        let similar_ids = index.similar_documents(&rtxn, 4, 2 /* limit */).unwrap();
+        assert_eq!(similar_ids, vec![0, 5]); // they all contain "friend" and "benoit"
+
+        drop(rtxn);
+    }
+}
