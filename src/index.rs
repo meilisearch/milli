@@ -1,10 +1,13 @@
 use std::borrow::Cow;
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::Context;
 use heed::types::*;
 use heed::{PolyDatabase, Database, RwTxn, RoTxn};
+use log::debug;
+use ordered_float::OrderedFloat;
 use roaring::RoaringBitmap;
 
 use crate::Search;
@@ -211,8 +214,9 @@ impl Index {
 
     /// Returns a [`Vec`] of at most `limit` documents that are similar to the given document.
     ///
-    /// Similarity is based on the frequency of the words in the document, the less frequent words
-    /// of the documents are retrieved and the documents containing a maximum of them are returned.
+    /// Similarity is based on the TF-IDF of all the terms in the given document, each of
+    /// these TF-IDFs are classified, we iterate througt them and retrieve the the documents
+    /// associated with the term with the best TF-IDF.
     pub fn similar_documents<'t>(
         &self,
         rtxn: &'t RoTxn,
@@ -220,24 +224,37 @@ impl Index {
         limit: usize,
     ) -> anyhow::Result<Vec<DocumentId>>
     {
-        // We store the frequency along with the docids associated with the word
-        // from the most to the least frequent that is present in the document.
-        let mut frequencies_words = BTreeMap::new();
+        let number_of_documents = self.number_of_documents(&rtxn)?;
+        let number_of_documents = number_of_documents as f64;
+
+        // We iterate over all of the document's words and compute the TF-IDF of each of
+        // the found term. We then save the result in a collection to be able iterate over
+        // the terms in the TF-IDF descending order (higher is better).
+        let mut tf_idfs = BTreeMap::new();
         for result in self.docid_word_positions.prefix_iter(rtxn, &(id, ""))? {
-            let ((_docid, word), _pos) = result?;
+            let ((_docid, word), positions) = result?;
+
             if let Some(docids) = self.word_docids.get(rtxn, word)? {
-                frequencies_words.insert(docids.len(), word);
+                let tf = positions.len() as f64;
+
+                let total_freq = docids.len() as f64;
+                let idf = (number_of_documents / total_freq).log2();
+                let tf_idf = tf * idf;
+
+                tf_idfs.insert(Reverse(OrderedFloat(tf_idf)), word);
             }
         }
 
         // Create an iterator that will be consumed by the next two iterations loops.
-        let mut frequencies_words_iter = frequencies_words.into_iter();
+        let mut tf_idfs_iter = tf_idfs.into_iter();
 
         // We first accumulate enough documents to work with, this help in the case
         // the least common word does only appear in the given document.
         let mut base = RoaringBitmap::new();
-        while let Some((_frequency, word)) = frequencies_words_iter.next() {
-            let docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+        while let Some((_tf_idf, word)) = tf_idfs_iter.next() {
+            debug!("TF-IDF filling with {:?}", word);
+            let mut docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+            docids.remove(id);
             base.union_with(&docids);
             if base.len() >= limit as u64 { break }
         }
@@ -247,8 +264,10 @@ impl Index {
         // current and previous intersections.
         let mut tmp = base;
         let mut previous_tmp = RoaringBitmap::new();
-        while let Some((_frequency, word)) = frequencies_words_iter.next() {
-            let docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+        while let Some((_tf_idf, word)) = tf_idfs_iter.next() {
+            debug!("TF-IDF intersecting with {:?}", word);
+            let mut docids = self.word_docids.get(rtxn, word)?.unwrap_or_default();
+            docids.remove(id);
             previous_tmp = tmp.clone();
             tmp.intersect_with(&docids);
             if tmp.len() <= limit as u64 { break }
@@ -260,7 +279,6 @@ impl Index {
         // We also make sure we do not return the original docids.
         let similar_documents = tmp.iter()
             .chain(previous_tmp)
-            .filter(|&i| i != id)
             .take(limit)
             .collect();
 

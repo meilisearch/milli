@@ -612,6 +612,7 @@ dependencies = [
  "near-proximity",
  "obkv",
  "once_cell",
+ "ordered-float",
  "rayon",
  "ringtail",
  "roaring",
@@ -707,6 +708,15 @@ name = "oorandom"
 version = "11.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a170cebd8021a008ea92e4db85a72f80b35df514ec664b296fdcbb654eac0b2c"
+
+[[package]]
+name = "ordered-float"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fe9037165d7023b1228bc4ae9a2fa1a2b0095eca6c2998c624723dfd01314a5"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "page_size"
