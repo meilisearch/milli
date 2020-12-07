@@ -4,6 +4,7 @@ mod criterion;
 mod external_documents_ids;
 mod fields_ids_map;
 mod index;
+mod index_store;
 mod mdfs;
 mod query_tokens;
 mod search;
@@ -29,6 +30,7 @@ pub use self::fields_ids_map::FieldsIdsMap;
 pub use self::heed_codec::{BEU32StrCodec, StrStrU8Codec, ObkvCodec};
 pub use self::heed_codec::{RoaringBitmapCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec};
 pub use self::index::Index;
+pub use self::index_store::IndexStore;
 pub use self::search::{Search, FacetCondition, SearchResult};
 pub use self::update_store::UpdateStore;
 
