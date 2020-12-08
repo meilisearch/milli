@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use heed::{EnvOpenOptions, EnvClosingEvent};
+use heed::EnvOpenOptions;
 use heed::types::Str;
 use uuid::{Uuid, adapter::Hyphenated};
 
@@ -32,6 +32,7 @@ impl IndexStore {
 
         // FIXME this is very bad to format a path like this
         let unique_path = format!("{}/indexes/{}", self.env.path().display(), unique_id);
+        fs::create_dir_all(&unique_path)?;
         self.indexes_name_path.put(&mut wtxn, name, &unique_path)?;
 
         wtxn.commit()?;
@@ -83,5 +84,76 @@ impl IndexStore {
         wtxn.commit()?;
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::update::IndexDocuments;
+
+    #[test]
+    fn simple_swap() {
+        let options = EnvOpenOptions::new();
+        let dir = tempfile::tempdir().unwrap();
+        let store = IndexStore::new(options, &dir).unwrap();
+
+        let options = EnvOpenOptions::new();
+        let hello = store.create_index("hello", options).unwrap();
+        let options = EnvOpenOptions::new();
+        let world = store.create_index("world", options).unwrap();
+
+        // We update the first index.
+        let mut wtxn = hello.write_txn().unwrap();
+        let update = IndexDocuments::new(&mut wtxn, &hello);
+        let content = &br#"[
+            { "name": "Mel Gibson" },
+            { "name": "Kevin Costner" }
+        ]"#[..];
+        update.execute(content, |_| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        // We update the second index.
+        let mut wtxn = world.write_txn().unwrap();
+        let update = IndexDocuments::new(&mut wtxn, &world);
+        let content = &br#"[
+            { "name": "Harrison Ford" },
+            { "name": "Richard Gere" }
+        ]"#[..];
+        update.execute(content, |_| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        let rtxn = hello.read_txn().unwrap();
+        let result = hello.search(&rtxn).query("gibson").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        drop(rtxn);
+
+        let rtxn = world.read_txn().unwrap();
+        let result = world.search(&rtxn).query("richard").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        drop(rtxn);
+
+        // We drop the previous references to the indexes before swapping them.
+        drop(hello);
+        drop(world);
+
+        store.swap_indexes("hello", "world").unwrap();
+
+        // We retrieve again the indexes after we swapped them.
+        // "hello" is the old "world" and "world" is the old "hello".
+        let hello = store.index("hello").unwrap().unwrap();
+        let world = store.index("world").unwrap().unwrap();
+
+        // We try to search what's in "hello" in "world".
+        let rtxn = world.read_txn().unwrap();
+        let result = world.search(&rtxn).query("kevin costner").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        drop(rtxn);
+
+        // We try to search what's in "world" in "hello".
+        let rtxn = hello.read_txn().unwrap();
+        let result = hello.search(&rtxn).query("harrison ford").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        drop(rtxn);
     }
 }
