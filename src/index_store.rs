@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 
 use anyhow::bail;
 use heed::EnvOpenOptions;
-use heed::types::Str;
+use heed::types::{Str, SerdeJson};
+use heed::{BytesEncode, BytesDecode};
 use uuid::{Uuid, adapter::Hyphenated};
 
 use crate::Index;
@@ -11,20 +13,25 @@ use crate::Index;
 pub struct IndexStore {
     env: heed::Env,
     indexes_name_path: heed::Database<Str, Str>,
+    indexes_name_options: heed::Database<Str, EnvOpenOptionsCodec>,
 }
 
 impl IndexStore {
     pub fn new<P: AsRef<Path>>(mut options: EnvOpenOptions, path: P) -> anyhow::Result<IndexStore> {
-        options.max_dbs(1);
+        options.max_dbs(2);
         let env = options.open(path)?;
         let indexes_name_path = env.create_database(Some("indexes-name-path"))?;
-        Ok(IndexStore { env, indexes_name_path })
+        let indexes_name_options = env.create_database(Some("indexes-name-options"))?;
+        Ok(IndexStore { env, indexes_name_path, indexes_name_options })
     }
 
     pub fn create_index(&self, name: &str, options: EnvOpenOptions) -> anyhow::Result<Index> {
         let mut wtxn = self.env.write_txn()?;
 
-        if let Some(path) = self.indexes_name_path.get(&wtxn, name)? {
+        if let Some(path) = self.indexes_name_path.get(&wtxn, name)?.map(ToOwned::to_owned) {
+            // We update the options even if the index already exists.
+            self.indexes_name_options.put(&mut wtxn, name, &options)?;
+            wtxn.commit()?;
             return Index::new(options, path);
         }
 
@@ -42,6 +49,7 @@ impl IndexStore {
             Some(path) => {
                 fs::create_dir_all(path)?;
                 self.indexes_name_path.put(&mut wtxn, name, path)?;
+                self.indexes_name_options.put(&mut wtxn, name, &options)?;
                 wtxn.commit()?;
                 self.create_index(name, options)
             },
@@ -52,9 +60,10 @@ impl IndexStore {
     pub fn index(&self, name: &str) -> anyhow::Result<Option<Index>> {
         let rtxn = self.env.read_txn()?;
         match self.indexes_name_path.get(&rtxn, name)? {
-            // FIXME the EnvOpenOptions params must be serialized in LMDB
-            //       to be able to reopen an Index with the same settings.
-            Some(path) => Index::new(EnvOpenOptions::new(), path).map(Some),
+            Some(path) => {
+                let options = self.indexes_name_options.get(&rtxn, name)?.unwrap_or_default();
+                Index::new(options, path).map(Some)
+            },
             None => Ok(None),
         }
     }
@@ -65,6 +74,7 @@ impl IndexStore {
             Some(path) => {
                 let path = path.to_owned();
                 self.indexes_name_path.delete(&mut wtxn, name)?;
+                self.indexes_name_options.delete(&mut wtxn, name)?;
                 let index = Index::new(EnvOpenOptions::new(), &path)?;
                 wtxn.commit()?;
                 index.prepare_for_closing().wait();
@@ -76,23 +86,51 @@ impl IndexStore {
     }
 
     pub fn swap_indexes(&self, first: &str, second: &str) -> anyhow::Result<bool> {
+        let fetch_index_data = |rtxn, name| -> anyhow::Result<Option<(String, EnvOpenOptions)>> {
+            let path = self.indexes_name_path.get(rtxn, name)?.map(ToOwned::to_owned);
+            let options = self.indexes_name_options.get(rtxn, name)?;
+            Ok(path.zip(options))
+        };
+
         let mut wtxn = self.env.write_txn()?;
+        let first_data = fetch_index_data(&wtxn, first)?;
+        let second_data = fetch_index_data(&wtxn, second)?;
 
-        let first_path = match self.indexes_name_path.get(&wtxn, first)? {
-            Some(path) => path.to_owned(),
-            None => return Ok(false),
-        };
+        match first_data.zip(second_data) {
+            Some(((first_path, first_options), (second_path, second_options))) => {
+                self.indexes_name_path.put(&mut wtxn, first, &second_path)?;
+                self.indexes_name_options.put(&mut wtxn, first, &second_options)?;
 
-        let second_path = match self.indexes_name_path.get(&wtxn, second)? {
-            Some(path) => path.to_owned(),
-            None => return Ok(false),
-        };
+                self.indexes_name_path.put(&mut wtxn, second, &first_path)?;
+                self.indexes_name_options.put(&mut wtxn, second, &first_options)?;
 
-        self.indexes_name_path.put(&mut wtxn, first, &second_path)?;
-        self.indexes_name_path.put(&mut wtxn, second, &first_path)?;
-        wtxn.commit()?;
+                wtxn.commit()?;
+                Ok(true)
+            },
+            None => Ok(false),
+        }
+    }
+}
 
-        Ok(true)
+struct EnvOpenOptionsCodec;
+
+impl BytesDecode<'_> for EnvOpenOptionsCodec {
+    type DItem = EnvOpenOptions;
+
+    fn bytes_decode(bytes: &[u8]) -> Option<Self::DItem> {
+        let (map_size, max_readers, max_dbs, flags) = SerdeJson::bytes_decode(bytes)?;
+        Some(EnvOpenOptions { map_size, max_readers, max_dbs, flags })
+    }
+}
+
+impl BytesEncode<'_> for EnvOpenOptionsCodec {
+    type EItem = EnvOpenOptions;
+
+    fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
+        let EnvOpenOptions { map_size, max_readers, max_dbs, flags } = item;
+        SerdeJson::bytes_encode(&(map_size, max_readers, max_dbs, flags))
+            .map(Cow::into_owned)
+            .map(Cow::Owned)
     }
 }
 
