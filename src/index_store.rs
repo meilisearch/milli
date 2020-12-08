@@ -99,7 +99,29 @@ impl IndexStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use crate::update::IndexDocuments;
+
+    #[test]
+    fn simple_delete() {
+        let options = EnvOpenOptions::new();
+        let dir = tempfile::tempdir().unwrap();
+        let store = IndexStore::new(options, &dir).unwrap();
+
+        let options = EnvOpenOptions::new();
+        let hello = store.create_index("hello", options).unwrap();
+
+        // We make sure that we drop all of the references we have on the index.
+        drop(hello);
+        assert!(store.delete_index("hello").unwrap());
+
+        // We try to get the index back.
+        let index = store.index("hello").unwrap();
+        assert!(index.is_none());
+
+        let mut iter = fs::read_dir(dir.path().join("indexes")).unwrap();
+        assert!(iter.next().is_none());
+    }
 
     #[test]
     fn simple_swap() {
