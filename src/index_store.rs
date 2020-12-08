@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::Path;
 
+use anyhow::bail;
 use heed::EnvOpenOptions;
 use heed::types::Str;
 use uuid::{Uuid, adapter::Hyphenated};
@@ -27,17 +28,25 @@ impl IndexStore {
             return Index::new(options, path);
         }
 
+        // Generate a unique UUID V4 and a path based on it for this index.
         let mut buffer = [0u8; Hyphenated::LENGTH];
         let unique_id = Uuid::new_v4().to_hyphenated().encode_lower(&mut buffer);
+        let unique_path = {
+            let mut path = self.env.path().to_path_buf();
+            path.push("indexes");
+            path.push(unique_id);
+            path
+        };
 
-        // FIXME this is very bad to format a path like this
-        let unique_path = format!("{}/indexes/{}", self.env.path().display(), unique_id);
-        fs::create_dir_all(&unique_path)?;
-        self.indexes_name_path.put(&mut wtxn, name, &unique_path)?;
-
-        wtxn.commit()?;
-
-        self.create_index(name, options)
+        match unique_path.to_str() {
+            Some(path) => {
+                fs::create_dir_all(path)?;
+                self.indexes_name_path.put(&mut wtxn, name, path)?;
+                wtxn.commit()?;
+                self.create_index(name, options)
+            },
+            None => bail!("path contains invalid UTF-8 characters"),
+        }
     }
 
     pub fn index(&self, name: &str) -> anyhow::Result<Option<Index>> {
