@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::Sender;
 use heed::types::{OwnedType, DecodeIgnore, SerdeJson, ByteSlice};
@@ -8,14 +9,14 @@ use serde::{Serialize, Deserialize};
 
 use crate::BEU64;
 
-#[derive(Clone)]
 pub struct UpdateStore<M, N> {
     env: Env,
     pending_meta: Database<OwnedType<BEU64>, SerdeJson<M>>,
     pending: Database<OwnedType<BEU64>, ByteSlice>,
     processed_meta: Database<OwnedType<BEU64>, SerdeJson<N>>,
     aborted_meta: Database<OwnedType<BEU64>, SerdeJson<M>>,
-    notification_sender: Sender<()>,
+    notification_sender: Option<Sender<()>>,
+    must_close: Arc<AtomicBool>,
 }
 
 impl<M: 'static, N: 'static> UpdateStore<M, N> {
@@ -23,7 +24,7 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
         mut options: EnvOpenOptions,
         path: P,
         mut update_function: F,
-    ) -> heed::Result<Arc<UpdateStore<M, N>>>
+    ) -> heed::Result<UpdateStore<M, N>>
     where
         P: AsRef<Path>,
         F: FnMut(u64, M, &[u8]) -> heed::Result<N> + Send + 'static,
@@ -41,21 +42,36 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
         // Send a first notification to trigger the process.
         let _ = notification_sender.send(());
 
-        let update_store = Arc::new(UpdateStore {
+        let update_store = UpdateStore {
             env,
             pending,
             pending_meta,
             processed_meta,
             aborted_meta,
-            notification_sender,
-        });
+            must_close: Arc::new(AtomicBool::new(false)),
+            notification_sender: Some(notification_sender),
+        };
 
-        let update_store_cloned = update_store.clone();
+        // We create an inner update store to be able to give it to the indexing thread
+        // and make sure that it don't own a clone of the channel to make sure that
+        // when we drop the last copy of the store it correctly disconnects the channel.
+        let inner_update_store = UpdateStore {
+            env: update_store.env.clone(),
+            must_close: update_store.must_close.clone(),
+            notification_sender: None,
+            ..update_store
+        };
+
         std::thread::spawn(move || {
             // Block and wait for something to process.
-            for () in notification_receiver {
+            'outer: for () in notification_receiver {
                 loop {
-                    match update_store_cloned.process_pending_update(&mut update_function) {
+                    // We must make sure to stop this loop if someone asked for that.
+                    if inner_update_store.must_close.load(Ordering::Relaxed) {
+                        break 'outer;
+                    }
+
+                    match inner_update_store.process_pending_update(&mut update_function) {
                         Ok(Some(_)) => (),
                         Ok(None) => break,
                         Err(e) => eprintln!("error while processing update: {}", e),
@@ -115,7 +131,7 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
 
         wtxn.commit()?;
 
-        if let Err(e) = self.notification_sender.try_send(()) {
+        if let Err(e) = self.notification_sender.as_ref().unwrap().try_send(()) {
             assert!(!e.is_disconnected(), "update notification channel is disconnected");
         }
 
@@ -279,6 +295,17 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
 
         Ok(aborted_updates)
     }
+
+    /// Returns an `EnvClosingEvent` that can be used to wait for the closing event,
+    /// multiple threads can wait on this event.
+    ///
+    /// It will first finish the update that it is currently processing
+    /// then closes the environment.
+    pub fn prepare_for_closing(self) -> heed::EnvClosingEvent {
+        self.must_close.store(true, Ordering::Relaxed);
+        let _ = self.notification_sender.as_ref().unwrap().try_send(());
+        self.env.prepare_for_closing()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -309,6 +336,20 @@ mod tests {
 
         let meta = update_store.meta(update_id).unwrap().unwrap();
         assert_eq!(meta, UpdateStatusMeta::Processed(format!("kiki processed")));
+    }
+
+    #[test]
+    fn prepare_for_closing() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = EnvOpenOptions::new();
+        let update_store = UpdateStore::open(options, dir, |_id, meta: String, _content| {
+            Ok(meta + " processed")
+        }).unwrap();
+
+        let meta = String::from("kiki");
+        let _update_id = update_store.register_update(&meta, &[]).unwrap();
+
+        update_store.prepare_for_closing().wait();
     }
 
     #[test]
