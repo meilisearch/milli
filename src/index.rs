@@ -265,6 +265,11 @@ impl Index {
         }
     }
 
+    /// Retrieve the number documents ids that faceted under this field id.
+    pub fn number_faceted_documents_ids(&self, rtxn: &RoTxn, field_id: FieldId) -> heed::Result<u64> {
+        todo!()
+    }
+
     /* criteria */
 
     pub fn put_criteria(&self, wtxn: &mut RwTxn, criteria: &[Criterion]) -> heed::Result<()> {
