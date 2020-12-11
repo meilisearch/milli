@@ -10,7 +10,7 @@ use roaring::RoaringBitmap;
 use crate::facet::FacetType;
 use crate::fields_ids_map::FieldsIdsMap;
 use crate::{default_criteria, Criterion, Search};
-use crate::{BEU32, DocumentId, FieldId, ExternalDocumentsIds};
+use crate::{BEU32, BEU64, DocumentId, FieldId, ExternalDocumentsIds};
 use crate::{
     RoaringBitmapCodec, BEU32StrCodec, StrStrU8Codec, ObkvCodec,
     BoRoaringBitmapCodec, CboRoaringBitmapCodec,
@@ -19,6 +19,7 @@ use crate::{
 pub const CRITERIA_KEY: &str = "criteria";
 pub const DISPLAYED_FIELDS_KEY: &str = "displayed-fields";
 pub const DOCUMENTS_IDS_KEY: &str = "documents-ids";
+pub const NUMBER_DOCUMENTS_IDS_KEY: &str = "number-documents-ids";
 pub const FACETED_DOCUMENTS_IDS_PREFIX: &str = "faceted-documents-ids";
 pub const FACETED_FIELDS_KEY: &str = "faceted-fields";
 pub const FIELDS_IDS_MAP_KEY: &str = "fields-ids-map";
@@ -101,12 +102,25 @@ impl Index {
 
     /// Writes the documents ids that corresponds to the user-ids-documents-ids FST.
     pub fn put_documents_ids(&self, wtxn: &mut RwTxn, docids: &RoaringBitmap) -> heed::Result<()> {
-        self.main.put::<_, Str, RoaringBitmapCodec>(wtxn, DOCUMENTS_IDS_KEY, docids)
+        let len = docids.len();
+        self.main.put::<_, Str, RoaringBitmapCodec>(wtxn, DOCUMENTS_IDS_KEY, docids)?;
+        self.main.put::<_, Str, OwnedType<BEU64>>(wtxn, NUMBER_DOCUMENTS_IDS_KEY, &BEU64::new(len))?;
+        Ok(())
     }
 
     /// Returns the internal documents ids.
     pub fn documents_ids(&self, rtxn: &RoTxn) -> heed::Result<RoaringBitmap> {
-        Ok(self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?.unwrap_or_default())
+        let documents_ids = self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?
+            .unwrap_or_default();
+        Ok(documents_ids)
+    }
+
+    /// Returns the number of documents indexed in the database.
+    pub fn number_of_documents(&self, rtxn: &RoTxn) -> anyhow::Result<u64> {
+        let count = self.main.get::<_, Str, OwnedType<BEU64>>(rtxn, NUMBER_DOCUMENTS_IDS_KEY)?
+            .map(BEU64::get)
+            .unwrap_or_default();
+        Ok(count)
     }
 
     /* primary key */
@@ -299,11 +313,6 @@ impl Index {
         }
 
         Ok(documents)
-    }
-
-    /// Returns the number of documents indexed in the database.
-    pub fn number_of_documents(&self, rtxn: &RoTxn) -> anyhow::Result<usize> {
-        Ok(self.documents_ids(rtxn).map(|docids| docids.len() as usize)?)
     }
 
     pub fn search<'a>(&'a self, rtxn: &'a RoTxn) -> Search<'a> {
