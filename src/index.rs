@@ -28,7 +28,6 @@ pub const HARD_EXTERNAL_DOCUMENTS_IDS_KEY: &str = "hard-external-documents-ids";
 pub const SOFT_EXTERNAL_DOCUMENTS_IDS_KEY: &str = "soft-external-documents-ids";
 pub const WORDS_FST_KEY: &str = "words-fst";
 
-#[derive(Clone)]
 pub struct Index {
     /// The LMDB environment which this index is associated with.
     pub env: heed::Env,
@@ -90,9 +89,6 @@ impl Index {
 
     /// Returns an `EnvClosingEvent` that can be used to wait for the closing event,
     /// multiple threads can wait on this event.
-    ///
-    /// Make sure that you drop all the copies of `Index`es you have, env closing are triggered
-    /// when all references are dropped, the last one will eventually close the environment.
     pub fn prepare_for_closing(self) -> heed::EnvClosingEvent {
         self.env.prepare_for_closing()
     }

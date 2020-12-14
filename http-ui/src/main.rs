@@ -289,6 +289,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Open the LMDB database.
     let index = Index::new(options, &opt.database)?;
+    let index = Arc::new(index);
 
     // Setup the LMDB based update database.
     let mut update_store_options = EnvOpenOptions::new();
@@ -464,6 +465,8 @@ async fn main() -> anyhow::Result<()> {
 
             Ok(meta)
         })?;
+
+    let update_store = Arc::new(update_store);
 
     // The database name will not change.
     let db_name = opt.database.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
