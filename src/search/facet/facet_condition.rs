@@ -61,6 +61,7 @@ impl FacetStringOperator {
         FacetStringOperator::Equal(s.to_lowercase())
     }
 
+    #[cfg(test)]
     fn not_equal(s: &str) -> Self {
         FacetStringOperator::equal(s).negate()
     }
