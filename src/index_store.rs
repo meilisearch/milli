@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -6,7 +5,6 @@ use std::path::Path;
 use anyhow::bail;
 use heed::EnvOpenOptions;
 use heed::types::{Str, SerdeJson};
-use heed::{BytesEncode, BytesDecode};
 use parking_lot::{RwLock, MappedRwLockReadGuard};
 use parking_lot::lock_api::{RwLockWriteGuard, RwLockReadGuard};
 use serde::{Serialize, Deserialize};
@@ -17,8 +15,8 @@ use crate::{Index, UpdateStore};
 pub struct IndexStore<M, N, F> {
     env: heed::Env,
     indexes_name_path: heed::Database<Str, Str>,
-    indexes_name_options: heed::Database<Str, EnvOpenOptionsCodec>,
-    indexes_name_update_options: heed::Database<Str, EnvOpenOptionsCodec>,
+    indexes_name_options: heed::Database<Str, SerdeJson<EnvOpenOptions>>,
+    indexes_name_update_options: heed::Database<Str, SerdeJson<EnvOpenOptions>>,
     indexes: RwLock<HashMap<String, (Index, UpdateStore<M, N>)>>,
     update_function: F,
 }
@@ -172,28 +170,6 @@ where
             },
             None => Ok(false),
         }
-    }
-}
-
-struct EnvOpenOptionsCodec;
-
-impl BytesDecode<'_> for EnvOpenOptionsCodec {
-    type DItem = EnvOpenOptions;
-
-    fn bytes_decode(bytes: &[u8]) -> Option<Self::DItem> {
-        let (map_size, max_readers, max_dbs, flags) = SerdeJson::bytes_decode(bytes)?;
-        Some(EnvOpenOptions { map_size, max_readers, max_dbs, flags })
-    }
-}
-
-impl BytesEncode<'_> for EnvOpenOptionsCodec {
-    type EItem = EnvOpenOptions;
-
-    fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
-        let EnvOpenOptions { map_size, max_readers, max_dbs, flags } = item;
-        SerdeJson::bytes_encode(&(map_size, max_readers, max_dbs, flags))
-            .map(Cow::into_owned)
-            .map(Cow::Owned)
     }
 }
 
