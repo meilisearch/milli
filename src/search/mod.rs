@@ -4,13 +4,13 @@ use std::fmt;
 use std::time::Instant;
 
 use anyhow::{bail, Context};
+use croaring::Bitmap;
 use fst::{IntoStreamer, Streamer};
 use levenshtein_automata::DFA;
 use levenshtein_automata::LevenshteinAutomatonBuilder as LevBuilder;
 use log::debug;
 use once_cell::sync::Lazy;
 use ordered_float::OrderedFloat;
-use roaring::bitmap::RoaringBitmap;
 
 use crate::facet::FacetType;
 use crate::heed_codec::facet::{FacetLevelValueF64Codec, FacetLevelValueI64Codec};
@@ -102,23 +102,23 @@ impl<'a> Search<'a> {
         &self,
         fst: &fst::Set<Cow<[u8]>>,
         dfas: Vec<(String, bool, DFA)>,
-    ) -> anyhow::Result<Vec<(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)>>
+    ) -> anyhow::Result<Vec<(HashMap<String, (u8, Bitmap)>, Bitmap)>>
     {
         // A Vec storing all the derived words from the original query words, associated
         // with the distance from the original word and the docids where the words appears.
-        let mut derived_words = Vec::<(HashMap::<String, (u8, RoaringBitmap)>, RoaringBitmap)>::with_capacity(dfas.len());
+        let mut derived_words = Vec::<(HashMap::<String, (u8, Bitmap)>, Bitmap)>::with_capacity(dfas.len());
 
         for (_word, _is_prefix, dfa) in dfas {
 
             let mut acc_derived_words = HashMap::new();
-            let mut unions_docids = RoaringBitmap::new();
+            let mut unions_docids = Bitmap::create();
             let mut stream = fst.search_with_state(&dfa).into_stream();
             while let Some((word, state)) = stream.next() {
 
                 let word = std::str::from_utf8(word)?;
                 let docids = self.index.word_docids.get(self.rtxn, word)?.unwrap();
                 let distance = dfa.distance(state);
-                unions_docids.union_with(&docids);
+                unions_docids.or_inplace(&docids);
                 acc_derived_words.insert(word.to_string(), (distance.to_u8(), docids));
             }
             derived_words.push((acc_derived_words, unions_docids));
@@ -129,22 +129,22 @@ impl<'a> Search<'a> {
 
     /// Returns the set of docids that contains all of the query words.
     fn compute_candidates(
-        derived_words: &[(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)],
-    ) -> RoaringBitmap
+        derived_words: &[(HashMap<String, (u8, Bitmap)>, Bitmap)],
+    ) -> Bitmap
     {
         // We sort the derived words by inverse popularity, this way intersections are faster.
         let mut derived_words: Vec<_> = derived_words.iter().collect();
-        derived_words.sort_unstable_by_key(|(_, docids)| docids.len());
+        derived_words.sort_unstable_by_key(|(_, docids)| docids.cardinality());
 
         // we do a union between all the docids of each of the derived words,
         // we got N unions (the number of original query words), we then intersect them.
-        let mut candidates = RoaringBitmap::new();
+        let mut candidates = Bitmap::create();
 
         for (i, (_, union_docids)) in derived_words.iter().enumerate() {
             if i == 0 {
                 candidates = union_docids.clone();
             } else {
-                candidates.intersect_with(&union_docids);
+                candidates.and_inplace(&union_docids);
             }
         }
 
@@ -156,15 +156,15 @@ impl<'a> Search<'a> {
         field_id: FieldId,
         facet_type: FacetType,
         ascending: bool,
-        mut documents_ids: RoaringBitmap,
+        mut documents_ids: Bitmap,
         limit: usize,
     ) -> anyhow::Result<Vec<DocumentId>>
     {
         let mut output: Vec<_> = match facet_type {
             FacetType::Float => {
-                if documents_ids.len() <= 1000 {
+                if documents_ids.cardinality() <= 1000 {
                     let db = self.index.field_id_docid_facet_values.remap_key_type::<FieldDocIdFacetF64Codec>();
-                    let mut docids_values = Vec::with_capacity(documents_ids.len() as usize);
+                    let mut docids_values = Vec::with_capacity(documents_ids.cardinality() as usize);
                     for docid in documents_ids.iter() {
                         let left = (field_id, docid, f64::MIN);
                         let right = (field_id, docid, f64::MAX);
@@ -191,17 +191,17 @@ impl<'a> Search<'a> {
                     let mut output = Vec::new();
                     for result in facet_fn(self.rtxn, self.index, field_id, documents_ids.clone())? {
                         let (_val, docids) = result?;
-                        limit_tmp = limit_tmp.saturating_sub(docids.len() as usize);
+                        limit_tmp = limit_tmp.saturating_sub(docids.cardinality() as usize);
                         output.push(docids);
                         if limit_tmp == 0 { break }
                     }
-                    output.into_iter().flatten().take(limit).collect()
+                    output.iter().flat_map(|b| b.iter()).take(limit).collect()
                 }
             },
             FacetType::Integer => {
-                if documents_ids.len() <= 1000 {
+                if documents_ids.cardinality() <= 1000 {
                     let db = self.index.field_id_docid_facet_values.remap_key_type::<FieldDocIdFacetI64Codec>();
-                    let mut docids_values = Vec::with_capacity(documents_ids.len() as usize);
+                    let mut docids_values = Vec::with_capacity(documents_ids.cardinality() as usize);
                     for docid in documents_ids.iter() {
                         let left = (field_id, docid, i64::MIN);
                         let right = (field_id, docid, i64::MAX);
@@ -228,11 +228,11 @@ impl<'a> Search<'a> {
                     let mut output = Vec::new();
                     for result in facet_fn(self.rtxn, self.index, field_id, documents_ids.clone())? {
                         let (_val, docids) = result?;
-                        limit_tmp = limit_tmp.saturating_sub(docids.len() as usize);
+                        limit_tmp = limit_tmp.saturating_sub(docids.cardinality() as usize);
                         output.push(docids);
                         if limit_tmp == 0 { break }
                     }
-                    output.into_iter().flatten().take(limit).collect()
+                    output.iter().flat_map(|b| b.iter()).take(limit).collect()
                 }
             },
             FacetType::String => bail!("criteria facet type must be a number"),
@@ -292,7 +292,7 @@ impl<'a> Search<'a> {
         let (candidates, derived_words) = match (facet_candidates, derived_words) {
             (Some(mut facet_candidates), Some(derived_words)) => {
                 let words_candidates = Self::compute_candidates(&derived_words);
-                facet_candidates.intersect_with(&words_candidates);
+                facet_candidates.and_inplace(&words_candidates);
                 (facet_candidates, derived_words)
             },
             (None, Some(derived_words)) => {
@@ -330,7 +330,7 @@ impl<'a> Search<'a> {
         let mut documents = Vec::new();
 
         // We execute the Mdfs iterator until we find enough documents.
-        while documents.iter().map(RoaringBitmap::len).sum::<u64>() < limit as u64 {
+        while documents.iter().map(Bitmap::cardinality).sum::<u64>() < limit as u64 {
             match mdfs.next().transpose()? {
                 Some((proximity, answer)) => {
                     debug!("answer with a proximity of {}: {:?}", proximity, answer);
@@ -351,7 +351,7 @@ impl<'a> Search<'a> {
                 }
                 ordered_documents.into_iter().flatten().take(limit).collect()
             },
-            None => documents.into_iter().flatten().take(limit).collect(),
+            None => documents.iter().flat_map(|b| b.iter()).take(limit).collect(),
         };
 
         Ok(SearchResult { found_words, documents_ids })

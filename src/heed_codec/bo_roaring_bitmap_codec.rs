@@ -1,26 +1,26 @@
 use std::borrow::Cow;
 use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 pub struct BoRoaringBitmapCodec;
 
 impl heed::BytesDecode<'_> for BoRoaringBitmapCodec {
-    type DItem = RoaringBitmap;
+    type DItem = Bitmap;
 
     fn bytes_decode(mut bytes: &[u8]) -> Option<Self::DItem> {
-        let mut bitmap = RoaringBitmap::new();
+        let mut bitmap = Bitmap::create();
         while let Ok(integer) = bytes.read_u32::<NativeEndian>() {
-            bitmap.insert(integer);
+            bitmap.add(integer);
         }
         Some(bitmap)
     }
 }
 
 impl heed::BytesEncode<'_> for BoRoaringBitmapCodec {
-    type EItem = RoaringBitmap;
+    type EItem = Bitmap;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
-        let mut bytes = Vec::with_capacity(item.len() as usize * 4);
+        let mut bytes = Vec::with_capacity(item.cardinality() as usize * 4);
         for integer in item.iter() {
             bytes.write_u32::<NativeEndian>(integer).ok()?;
         }

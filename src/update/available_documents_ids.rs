@@ -1,17 +1,18 @@
 use std::iter::{Chain, FromIterator};
 use std::ops::RangeInclusive;
-use roaring::bitmap::{RoaringBitmap, IntoIter};
+use std::vec::IntoIter;
+use croaring::Bitmap;
 
 pub struct AvailableDocumentsIds {
-    iter: Chain<IntoIter, RangeInclusive<u32>>,
+    iter: Chain<IntoIter<u32>, RangeInclusive<u32>>,
 }
 
 impl AvailableDocumentsIds {
-    pub fn from_documents_ids(docids: &RoaringBitmap) -> AvailableDocumentsIds {
-        match docids.max() {
+    pub fn from_documents_ids(docids: &Bitmap) -> AvailableDocumentsIds {
+        match docids.maximum() {
             Some(last_id) => {
-                let mut available = RoaringBitmap::from_iter(0..last_id);
-                available.difference_with(&docids);
+                let mut available = Bitmap::from_iter(0..last_id);
+                available.andnot_inplace(&docids);
 
                 let iter = match last_id.checked_add(1) {
                     Some(id) => id..=u32::max_value(),
@@ -19,14 +20,11 @@ impl AvailableDocumentsIds {
                 };
 
                 AvailableDocumentsIds {
-                    iter: available.into_iter().chain(iter),
+                    iter: available.to_vec().into_iter().chain(iter),
                 }
             },
-            None => {
-                let empty = RoaringBitmap::new().into_iter();
-                AvailableDocumentsIds {
-                    iter: empty.chain(0..=u32::max_value()),
-                }
+            None => AvailableDocumentsIds {
+                iter: vec![].into_iter().chain(0..=u32::max_value()),
             },
         }
     }
@@ -46,7 +44,7 @@ mod tests {
 
     #[test]
     fn empty() {
-        let base = RoaringBitmap::new();
+        let base = Bitmap::create();
         let left = AvailableDocumentsIds::from_documents_ids(&base);
         let right = 0..=u32::max_value();
         left.zip(right).take(500).for_each(|(l, r)| assert_eq!(l, r));
@@ -54,11 +52,11 @@ mod tests {
 
     #[test]
     fn scattered() {
-        let mut base = RoaringBitmap::new();
-        base.insert(0);
-        base.insert(10);
-        base.insert(100);
-        base.insert(405);
+        let mut base = Bitmap::create();
+        base.add(0);
+        base.add(10);
+        base.add(100);
+        base.add(405);
 
         let left = AvailableDocumentsIds::from_documents_ids(&base);
         let right = (0..=u32::max_value()).filter(|&n| n != 0 && n != 10 && n != 100 && n != 405);

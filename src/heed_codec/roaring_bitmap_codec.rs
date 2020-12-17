@@ -1,22 +1,20 @@
 use std::borrow::Cow;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 pub struct RoaringBitmapCodec;
 
 impl heed::BytesDecode<'_> for RoaringBitmapCodec {
-    type DItem = RoaringBitmap;
+    type DItem = Bitmap;
 
     fn bytes_decode(bytes: &[u8]) -> Option<Self::DItem> {
-        RoaringBitmap::deserialize_from(bytes).ok()
+        Bitmap::try_deserialize(bytes)
     }
 }
 
 impl heed::BytesEncode<'_> for RoaringBitmapCodec {
-    type EItem = RoaringBitmap;
+    type EItem = Bitmap;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
-        let mut bytes = Vec::with_capacity(item.serialized_size());
-        item.serialize_into(&mut bytes).ok()?;
-        Some(Cow::Owned(bytes))
+        Some(Cow::Owned(item.serialize()))
     }
 }

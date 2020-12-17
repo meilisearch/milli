@@ -219,7 +219,7 @@ fn most_common_words(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyhow:
     for result in index.word_docids.iter(rtxn)? {
         if limit == 0 { break }
         let (word, docids) = result?;
-        heap.push((Reverse(docids.len()), word));
+        heap.push((Reverse(docids.cardinality()), word));
         if heap.len() > limit { heap.pop(); }
     }
 
@@ -427,7 +427,7 @@ fn facet_values_docids(index: &Index, rtxn: &heed::RoTxn, debug: bool, field_nam
 
     for result in iter {
         let (value, docids) = result?;
-        let count = docids.len();
+        let count = docids.cardinality();
         let docids = if debug {
             format!("{:?}", docids)
         } else {
@@ -585,7 +585,7 @@ fn average_number_of_positions_by_word(index: &Index, rtxn: &heed::RoTxn) -> any
     let db = index.docid_word_positions.as_polymorph();
     for result in db.iter::<_, DecodeIgnore, BoRoaringBitmapCodec>(rtxn)? {
         let ((), val) = result?;
-        values_length.push(val.len() as u32);
+        values_length.push(val.cardinality() as u32);
         count += 1;
     }
 
@@ -628,10 +628,10 @@ fn size_of_database(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Re
 fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Result<()> {
     use heed::types::ByteSlice;
     use heed::{Error, BytesDecode};
-    use roaring::RoaringBitmap;
+    use croaring::Bitmap;
     use crate::{BoRoaringBitmapCodec, CboRoaringBitmapCodec, RoaringBitmapCodec};
 
-    fn compute_stats<'a, DC: BytesDecode<'a, DItem = RoaringBitmap>>(
+    fn compute_stats<'a, DC: BytesDecode<'a, DItem = Bitmap>>(
         db: heed::PolyDatabase,
         rtxn: &'a heed::RoTxn,
         name: &str,
@@ -646,7 +646,7 @@ fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Resu
             key_size += key.len() as u64;
             val_size += val.len() as u64;
             let val = DC::bytes_decode(val).ok_or(Error::Decoding)?;
-            values_length.push(val.len() as u32);
+            values_length.push(val.cardinality() as u32);
         }
 
         values_length.sort_unstable();

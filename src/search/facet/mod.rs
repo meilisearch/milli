@@ -7,7 +7,7 @@ use heed::{BytesEncode, BytesDecode};
 use heed::{Database, RoRange, RoRevRange, LazyDecode};
 use log::debug;
 use num_traits::Bounded;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::heed_codec::CboRoaringBitmapCodec;
 use crate::{Index, FieldId};
@@ -53,7 +53,7 @@ where
     KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
     T: PartialOrd + Copy,
 {
-    type Item = heed::Result<((FieldId, u8, T, T), RoaringBitmap)>;
+    type Item = heed::Result<((FieldId, u8, T, T), Bitmap)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.iter.next() {
@@ -114,7 +114,7 @@ where
     KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
     T: PartialOrd + Copy,
 {
-    type Item = heed::Result<((FieldId, u8, T, T), RoaringBitmap)>;
+    type Item = heed::Result<((FieldId, u8, T, T), Bitmap)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -144,7 +144,7 @@ pub struct FacetIter<'t, T: 't, KC> {
     rtxn: &'t heed::RoTxn<'t>,
     db: Database<KC, CboRoaringBitmapCodec>,
     field_id: FieldId,
-    level_iters: Vec<(RoaringBitmap, Either<FacetRange<'t, T, KC>, FacetRevRange<'t, T, KC>>)>,
+    level_iters: Vec<(Bitmap, Either<FacetRange<'t, T, KC>, FacetRevRange<'t, T, KC>>)>,
 }
 
 impl<'t, T, KC> FacetIter<'t, T, KC>
@@ -157,7 +157,7 @@ where
         rtxn: &'t heed::RoTxn,
         index: &'t Index,
         field_id: FieldId,
-        documents_ids: RoaringBitmap,
+        documents_ids: Bitmap,
     ) -> heed::Result<FacetIter<'t, T, KC>>
     {
         let db = index.facet_field_id_value_docids.remap_key_type::<KC>();
@@ -170,7 +170,7 @@ where
         rtxn: &'t heed::RoTxn,
         index: &'t Index,
         field_id: FieldId,
-        documents_ids: RoaringBitmap,
+        documents_ids: Bitmap,
     ) -> heed::Result<FacetIter<'t, T, KC>>
     {
         let db = index.facet_field_id_value_docids.remap_key_type::<KC>();
@@ -195,7 +195,7 @@ where
     KC: for<'x> heed::BytesEncode<'x, EItem = (FieldId, u8, T, T)>,
     T: PartialOrd + Copy + Bounded + Debug,
 {
-    type Item = heed::Result<(T, RoaringBitmap)>;
+    type Item = heed::Result<(T, Bitmap)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
@@ -212,9 +212,9 @@ where
                 match result {
                     Ok(((_fid, level, left, right), mut docids)) => {
 
-                        docids.intersect_with(&documents_ids);
+                        docids.and_inplace(&documents_ids);
                         if !docids.is_empty() {
-                            documents_ids.difference_with(&docids);
+                            documents_ids.andnot_inplace(&docids);
 
                             if level == 0 {
                                 debug!("found {:?} at {:?}",  docids, left);

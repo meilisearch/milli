@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{anyhow, Context};
 use grenad::CompressionType;
 use log::info;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 use serde_json::{Map, Value};
 
 use crate::{BEU32, MergeFn, Index, FieldId, FieldsIdsMap, ExternalDocumentsIds};
@@ -19,8 +19,8 @@ pub struct TransformOutput {
     pub primary_key: FieldId,
     pub fields_ids_map: FieldsIdsMap,
     pub external_documents_ids: ExternalDocumentsIds<'static>,
-    pub new_documents_ids: RoaringBitmap,
-    pub replaced_documents_ids: RoaringBitmap,
+    pub new_documents_ids: Bitmap,
+    pub replaced_documents_ids: Bitmap,
     pub documents_count: usize,
     pub documents_file: File,
 }
@@ -115,8 +115,8 @@ impl Transform<'_, '_> {
                 primary_key,
                 fields_ids_map,
                 external_documents_ids: ExternalDocumentsIds::default(),
-                new_documents_ids: RoaringBitmap::new(),
-                replaced_documents_ids: RoaringBitmap::new(),
+                new_documents_ids: Bitmap::create(),
+                replaced_documents_ids: Bitmap::create(),
                 documents_count: 0,
                 documents_file: tempfile::tempfile()?,
             });
@@ -387,8 +387,8 @@ impl Transform<'_, '_> {
             self.max_memory,
         );
         let mut new_external_documents_ids_builder = fst::MapBuilder::memory();
-        let mut replaced_documents_ids = RoaringBitmap::new();
-        let mut new_documents_ids = RoaringBitmap::new();
+        let mut replaced_documents_ids = Bitmap::create();
+        let mut new_documents_ids = Bitmap::create();
         let mut obkv_buffer = Vec::new();
 
         // While we write into final file we get or generate the internal documents ids.
@@ -407,7 +407,7 @@ impl Transform<'_, '_> {
                 Some(docid) => {
                     // If we find the user id in the current external documents ids map
                     // we use it and insert it in the list of replaced documents.
-                    replaced_documents_ids.insert(docid);
+                    replaced_documents_ids.add(docid);
 
                     // Depending on the update indexing method we will merge
                     // the document update with the current document or not.
@@ -429,7 +429,7 @@ impl Transform<'_, '_> {
                     let new_docid = available_documents_ids.next()
                         .context("no more available documents ids")?;
                     new_external_documents_ids_builder.insert(external_id, new_docid as u64)?;
-                    new_documents_ids.insert(new_docid);
+                    new_documents_ids.add(new_docid);
                     (new_docid, update_obkv)
                 },
             };
@@ -484,7 +484,7 @@ impl Transform<'_, '_> {
         let current_fields_ids_map = self.index.fields_ids_map(self.rtxn)?;
         let external_documents_ids = self.index.external_documents_ids(self.rtxn)?;
         let documents_ids = self.index.documents_ids(self.rtxn)?;
-        let documents_count = documents_ids.len() as usize;
+        let documents_count = documents_ids.cardinality() as usize;
 
         // We create a final writer to write the new documents in order from the sorter.
         let file = tempfile::tempfile()?;
@@ -519,7 +519,7 @@ impl Transform<'_, '_> {
             fields_ids_map,
             external_documents_ids: external_documents_ids.into_static(),
             new_documents_ids: documents_ids,
-            replaced_documents_ids: RoaringBitmap::default(),
+            replaced_documents_ids: Bitmap::create(),
             documents_count,
             documents_file,
         })

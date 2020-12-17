@@ -13,7 +13,7 @@ use heed::BytesEncode;
 use linked_hash_map::LinkedHashMap;
 use log::{debug, info};
 use ordered_float::OrderedFloat;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 use serde_json::Value;
 use tempfile::tempfile;
 
@@ -52,11 +52,11 @@ pub struct Store {
     searchable_fields: HashSet<FieldId>,
     faceted_fields: HashMap<FieldId, FacetType>,
     // Caches
-    word_docids: LinkedHashMap<SmallVec32<u8>, RoaringBitmap>,
+    word_docids: LinkedHashMap<SmallVec32<u8>, Bitmap>,
     word_docids_limit: usize,
-    words_pairs_proximities_docids: LinkedHashMap<(SmallVec32<u8>, SmallVec32<u8>, u8), RoaringBitmap>,
+    words_pairs_proximities_docids: LinkedHashMap<(SmallVec32<u8>, SmallVec32<u8>, u8), Bitmap>,
     words_pairs_proximities_docids_limit: usize,
-    facet_field_value_docids: LinkedHashMap<(u8, FacetValue), RoaringBitmap>,
+    facet_field_value_docids: LinkedHashMap<(u8, FacetValue), Bitmap>,
     facet_field_value_docids_limit: usize,
     // MTBL parameters
     chunk_compression_type: CompressionType,
@@ -168,11 +168,11 @@ impl Store {
     fn insert_word_docid(&mut self, word: &str, id: DocumentId) -> anyhow::Result<()> {
         // if get_refresh finds the element it is assured to be at the end of the linked hash map.
         match self.word_docids.get_refresh(word.as_bytes()) {
-            Some(old) => { old.insert(id); },
+            Some(old) => { old.add(id); },
             None => {
                 let word_vec = SmallVec32::from(word.as_bytes());
                 // A newly inserted element is append at the end of the linked hash map.
-                self.word_docids.insert(word_vec, RoaringBitmap::from_iter(Some(id)));
+                self.word_docids.insert(word_vec, Bitmap::from_iter(Some(id)));
                 // If the word docids just reached it's capacity we must make sure to remove
                 // one element, this way next time we insert we doesn't grow the capacity.
                 if self.word_docids.len() == self.word_docids_limit {
@@ -198,10 +198,10 @@ impl Store {
         let key = (field_id, field_value);
         // if get_refresh finds the element it is assured to be at the end of the linked hash map.
         match self.facet_field_value_docids.get_refresh(&key) {
-            Some(old) => { old.insert(id); },
+            Some(old) => { old.add(id); },
             None => {
                 // A newly inserted element is append at the end of the linked hash map.
-                self.facet_field_value_docids.insert(key, RoaringBitmap::from_iter(Some(id)));
+                self.facet_field_value_docids.insert(key, Bitmap::from_iter(Some(id)));
                 // If the word docids just reached it's capacity we must make sure to remove
                 // one element, this way next time we insert we doesn't grow the capacity.
                 if self.facet_field_value_docids.len() == self.facet_field_value_docids_limit {
@@ -230,10 +230,10 @@ impl Store {
             // if get_refresh finds the element it is assured
             // to be at the end of the linked hash map.
             match self.words_pairs_proximities_docids.get_refresh(&key) {
-                Some(old) => { old.insert(id); },
+                Some(old) => { old.add(id); },
                 None => {
                     // A newly inserted element is append at the end of the linked hash map.
-                    let ids = RoaringBitmap::from_iter(Some(id));
+                    let ids = Bitmap::from_iter(Some(id));
                     self.words_pairs_proximities_docids.insert(key, ids);
                 }
             }
@@ -285,7 +285,7 @@ impl Store {
 
     fn write_words_pairs_proximities(
         sorter: &mut Sorter<MergeFn>,
-        iter: impl IntoIterator<Item=((SmallVec32<u8>, SmallVec32<u8>, u8), RoaringBitmap)>,
+        iter: impl IntoIterator<Item=((SmallVec32<u8>, SmallVec32<u8>, u8), Bitmap)>,
     ) -> anyhow::Result<()>
     {
         let mut key = Vec::new();
@@ -328,7 +328,7 @@ impl Store {
             key.truncate(base_size);
             key.extend_from_slice(word.as_bytes());
             // We serialize the positions into a buffer.
-            let positions = RoaringBitmap::from_iter(positions.iter().cloned());
+            let positions = Bitmap::from_iter(positions.iter().cloned());
             let bytes = BoRoaringBitmapCodec::bytes_encode(&positions)
                 .with_context(|| "could not serialize positions")?;
             // that we write under the generated key into MTBL
@@ -344,7 +344,7 @@ impl Store {
         sorter: &mut Sorter<MergeFn>,
         iter: I,
     ) -> anyhow::Result<()>
-    where I: IntoIterator<Item=((FieldId, FacetValue), RoaringBitmap)>
+    where I: IntoIterator<Item=((FieldId, FacetValue), Bitmap)>
     {
         use FacetValue::*;
 
@@ -389,19 +389,15 @@ impl Store {
     }
 
     fn write_word_docids<I>(sorter: &mut Sorter<MergeFn>, iter: I) -> anyhow::Result<()>
-    where I: IntoIterator<Item=(SmallVec32<u8>, RoaringBitmap)>
+    where I: IntoIterator<Item=(SmallVec32<u8>, Bitmap)>
     {
         let mut key = Vec::new();
-        let mut buffer = Vec::new();
 
         for (word, ids) in iter {
             key.clear();
             key.extend_from_slice(&word);
             // We serialize the document ids into a buffer
-            buffer.clear();
-            let ids = RoaringBitmap::from_iter(ids);
-            buffer.reserve(ids.serialized_size());
-            ids.serialize_into(&mut buffer)?;
+            let buffer = ids.serialize();
             // that we write under the generated key into MTBL
             if lmdb_key_valid_size(&key) {
                 sorter.insert(&key, &buffer)?;

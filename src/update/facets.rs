@@ -7,7 +7,7 @@ use heed::types::{ByteSlice, DecodeIgnore};
 use heed::{BytesEncode, Error};
 use log::debug;
 use num_traits::{Bounded, Zero};
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::facet::FacetType;
 use crate::heed_codec::CboRoaringBitmapCodec;
@@ -192,7 +192,7 @@ where
     for (level, group_size) in group_size_iter {
         let mut left = T::zero();
         let mut right = T::zero();
-        let mut group_docids = RoaringBitmap::new();
+        let mut group_docids = Bitmap::create();
 
         let db = db.remap_key_type::<KC>();
         for (i, result) in db.range(rtxn, &level_0_range)?.enumerate() {
@@ -206,12 +206,12 @@ where
                 write_entry::<T, KC>(&mut writer, field_id, level, left, right, &group_docids)?;
 
                 // We save the left bound for the new group and also reset the docids.
-                group_docids = RoaringBitmap::new();
+                group_docids = Bitmap::create();
                 left = value;
             }
 
             // The right bound is always the bound we run through.
-            group_docids.union_with(&docids);
+            group_docids.or_inplace(&docids);
             right = value;
         }
 
@@ -227,12 +227,12 @@ fn compute_faceted_documents_ids(
     rtxn: &heed::RoTxn,
     db: heed::Database<ByteSlice, CboRoaringBitmapCodec>,
     field_id: u8,
-) -> anyhow::Result<RoaringBitmap>
+) -> anyhow::Result<Bitmap>
 {
-    let mut documents_ids = RoaringBitmap::new();
+    let mut documents_ids = Bitmap::create();
     for result in db.prefix_iter(rtxn, &[field_id])? {
         let (_key, docids) = result?;
-        documents_ids.union_with(&docids);
+        documents_ids.or_inplace(&docids);
     }
     Ok(documents_ids)
 }
@@ -243,7 +243,7 @@ fn write_entry<T, KC>(
     level: u8,
     left: T,
     right: T,
-    ids: &RoaringBitmap,
+    ids: &Bitmap,
 ) -> anyhow::Result<()>
 where
     KC: for<'x> heed::BytesEncode<'x, EItem = (u8, u8, T, T)>,

@@ -1,6 +1,6 @@
 use fst::IntoStreamer;
 use heed::types::ByteSlice;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::facet::FacetType;
 use crate::{Index, BEU32, SmallString32, ExternalDocumentsIds};
@@ -11,7 +11,7 @@ pub struct DeleteDocuments<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
     index: &'i Index,
     external_documents_ids: ExternalDocumentsIds<'static>,
-    documents_ids: RoaringBitmap,
+    documents_ids: Bitmap,
 }
 
 impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
@@ -28,16 +28,16 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             wtxn,
             index,
             external_documents_ids,
-            documents_ids: RoaringBitmap::new(),
+            documents_ids: Bitmap::create(),
         })
     }
 
     pub fn delete_document(&mut self, docid: u32) {
-        self.documents_ids.insert(docid);
+        self.documents_ids.add(docid);
     }
 
-    pub fn delete_documents(&mut self, docids: &RoaringBitmap) {
-        self.documents_ids.union_with(docids);
+    pub fn delete_documents(&mut self, docids: &Bitmap) {
+        self.documents_ids.or_inplace(docids);
     }
 
     pub fn delete_external_id(&mut self, external_id: &str) -> Option<u32> {
@@ -57,13 +57,13 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
 
         // We remove the documents ids that we want to delete
         // from the documents in the database and write them back.
-        let current_documents_ids_len = documents_ids.len();
-        documents_ids.difference_with(&self.documents_ids);
+        let current_documents_ids_len = documents_ids.cardinality();
+        documents_ids.andnot_inplace(&self.documents_ids);
         self.index.put_documents_ids(self.wtxn, &documents_ids)?;
 
         // We can execute a ClearDocuments operation when the number of documents
         // to delete is exactly the number of documents in the database.
-        if current_documents_ids_len == self.documents_ids.len() {
+        if current_documents_ids_len == self.documents_ids.cardinality() {
             return ClearDocuments::new(self.wtxn, self.index).execute();
         }
 
@@ -84,7 +84,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         // Retrieve the words and the external documents ids contained in the documents.
         let mut words = Vec::new();
         let mut external_ids = Vec::new();
-        for docid in &self.documents_ids {
+        for docid in self.documents_ids.iter() {
             // We create an iterator to be able to get the content and delete the document
             // content itself. It's faster to acquire a cursor to get and delete,
             // as we avoid traversing the LMDB B-Tree two times but only once.
@@ -136,12 +136,12 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             let mut iter = word_docids.prefix_iter_mut(self.wtxn, &word)?;
             if let Some((key, mut docids)) = iter.next().transpose()? {
                 if key == word.as_ref() {
-                    let previous_len = docids.len();
-                    docids.difference_with(&self.documents_ids);
+                    let previous_len = docids.cardinality();
+                    docids.andnot_inplace(&self.documents_ids);
                     if docids.is_empty() {
                         iter.del_current()?;
                         *must_remove = true;
-                    } else if docids.len() != previous_len {
+                    } else if docids.cardinality() != previous_len {
                         iter.put_current(key, &docids)?;
                     }
                 }
@@ -176,11 +176,11 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         let mut iter = word_pair_proximity_docids.remap_key_type::<ByteSlice>().iter_mut(self.wtxn)?;
         while let Some(result) = iter.next() {
             let (bytes, mut docids) = result?;
-            let previous_len = docids.len();
-            docids.difference_with(&self.documents_ids);
+            let previous_len = docids.cardinality();
+            docids.andnot_inplace(&self.documents_ids);
             if docids.is_empty() {
                 iter.del_current()?;
-            } else if docids.len() != previous_len {
+            } else if docids.cardinality() != previous_len {
                 iter.put_current(bytes, &docids)?;
             }
         }
@@ -191,7 +191,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         let faceted_fields = self.index.faceted_fields(self.wtxn)?;
         for (field_id, facet_type) in faceted_fields {
             let mut docids = self.index.faceted_documents_ids(self.wtxn, field_id)?;
-            docids.difference_with(&self.documents_ids);
+            docids.andnot_inplace(&self.documents_ids);
             self.index.put_faceted_documents_ids(self.wtxn, field_id, &docids)?;
 
             // We delete the entries that are part of the documents ids.
@@ -231,17 +231,17 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         let mut iter = facet_field_id_value_docids.iter_mut(self.wtxn)?;
         while let Some(result) = iter.next() {
             let (bytes, mut docids) = result?;
-            let previous_len = docids.len();
-            docids.difference_with(&self.documents_ids);
+            let previous_len = docids.cardinality();
+            docids.andnot_inplace(&self.documents_ids);
             if docids.is_empty() {
                 iter.del_current()?;
-            } else if docids.len() != previous_len {
+            } else if docids.cardinality() != previous_len {
                 iter.put_current(bytes, &docids)?;
             }
         }
 
         drop(iter);
 
-        Ok(self.documents_ids.len() as usize)
+        Ok(self.documents_ids.cardinality() as usize)
     }
 }

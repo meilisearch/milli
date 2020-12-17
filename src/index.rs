@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::Context;
 use heed::types::*;
 use heed::{PolyDatabase, Database, RwTxn, RoTxn};
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::facet::FacetType;
 use crate::fields_ids_map::FieldsIdsMap;
@@ -100,13 +100,14 @@ impl Index {
     /* documents ids */
 
     /// Writes the documents ids that corresponds to the user-ids-documents-ids FST.
-    pub fn put_documents_ids(&self, wtxn: &mut RwTxn, docids: &RoaringBitmap) -> heed::Result<()> {
+    pub fn put_documents_ids(&self, wtxn: &mut RwTxn, docids: &Bitmap) -> heed::Result<()> {
         self.main.put::<_, Str, RoaringBitmapCodec>(wtxn, DOCUMENTS_IDS_KEY, docids)
     }
 
     /// Returns the internal documents ids.
-    pub fn documents_ids(&self, rtxn: &RoTxn) -> heed::Result<RoaringBitmap> {
-        Ok(self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?.unwrap_or_default())
+    pub fn documents_ids(&self, rtxn: &RoTxn) -> heed::Result<Bitmap> {
+        Ok(self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?
+            .unwrap_or_else(|| Bitmap::create()))
     }
 
     /* primary key */
@@ -233,7 +234,7 @@ impl Index {
     /* faceted documents ids */
 
     /// Writes the documents ids that are faceted under this field id.
-    pub fn put_faceted_documents_ids(&self, wtxn: &mut RwTxn, field_id: FieldId, docids: &RoaringBitmap) -> heed::Result<()> {
+    pub fn put_faceted_documents_ids(&self, wtxn: &mut RwTxn, field_id: FieldId, docids: &Bitmap) -> heed::Result<()> {
         let mut buffer = [0u8; FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..FACETED_DOCUMENTS_IDS_PREFIX.len()].clone_from_slice(FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
         *buffer.last_mut().unwrap() = field_id;
@@ -241,13 +242,13 @@ impl Index {
     }
 
     /// Retrieve all the documents ids that faceted under this field id.
-    pub fn faceted_documents_ids(&self, rtxn: &RoTxn, field_id: FieldId) -> heed::Result<RoaringBitmap> {
+    pub fn faceted_documents_ids(&self, rtxn: &RoTxn, field_id: FieldId) -> heed::Result<Bitmap> {
         let mut buffer = [0u8; FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..FACETED_DOCUMENTS_IDS_PREFIX.len()].clone_from_slice(FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
         *buffer.last_mut().unwrap() = field_id;
         match self.main.get::<_, ByteSlice, RoaringBitmapCodec>(rtxn, &buffer)? {
             Some(docids) => Ok(docids),
-            None => Ok(RoaringBitmap::new()),
+            None => Ok(Bitmap::create()),
         }
     }
 
@@ -303,7 +304,7 @@ impl Index {
 
     /// Returns the number of documents indexed in the database.
     pub fn number_of_documents(&self, rtxn: &RoTxn) -> anyhow::Result<usize> {
-        Ok(self.documents_ids(rtxn).map(|docids| docids.len() as usize)?)
+        Ok(self.documents_ids(rtxn).map(|docids| docids.cardinality() as usize)?)
     }
 
     pub fn search<'a>(&'a self, rtxn: &'a RoTxn) -> Search<'a> {

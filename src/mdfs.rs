@@ -2,16 +2,16 @@ use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::mem;
 
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 use crate::Index;
 
 /// A mana depth first search implementation.
 pub struct Mdfs<'a> {
     index: &'a Index,
     rtxn: &'a heed::RoTxn<'a>,
-    words: &'a [(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)],
-    union_cache: HashMap<(usize, u8), RoaringBitmap>,
-    candidates: RoaringBitmap,
+    words: &'a [(HashMap<String, (u8, Bitmap)>, Bitmap)],
+    union_cache: HashMap<(usize, u8), Bitmap>,
+    candidates: Bitmap,
     mana: u32,
     max_mana: u32,
 }
@@ -20,8 +20,8 @@ impl<'a> Mdfs<'a> {
     pub fn new(
         index: &'a Index,
         rtxn: &'a heed::RoTxn,
-        words: &'a [(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)],
-        candidates: RoaringBitmap,
+        words: &'a [(HashMap<String, (u8, Bitmap)>, Bitmap)],
+        candidates: Bitmap,
     ) -> Mdfs<'a>
     {
         // Compute the number of pairs (windows) we have for this list of words.
@@ -32,18 +32,18 @@ impl<'a> Mdfs<'a> {
 }
 
 impl<'a> Iterator for Mdfs<'a> {
-    type Item = anyhow::Result<(u32, RoaringBitmap)>;
+    type Item = anyhow::Result<(u32, Bitmap)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // If there is less or only one word therefore the only
         // possible documents that we can return are the candidates.
         if self.words.len() <= 1 {
             if self.candidates.is_empty() { return None }
-            return Some(Ok((0, mem::take(&mut self.candidates))));
+            return Some(Ok((0, mem::replace(&mut self.candidates, Bitmap::create()))));
         }
 
         while self.mana <= self.max_mana {
-            let mut answer = RoaringBitmap::new();
+            let mut answer = Bitmap::create();
             let result = mdfs_step(
                 &self.index,
                 &self.rtxn,
@@ -67,7 +67,7 @@ impl<'a> Iterator for Mdfs<'a> {
 
                         // We remove the answered documents from the list of
                         // candidates to be sure we don't search for them again.
-                        self.candidates.difference_with(&answer);
+                        self.candidates.andnot_inplace(&answer);
 
                         // We return the answer.
                         return Some(Ok((proximity, answer)));
@@ -85,11 +85,11 @@ fn mdfs_step(
     index: &Index,
     rtxn: &heed::RoTxn,
     mana: u32,
-    words: &[(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)],
-    candidates: &RoaringBitmap,
-    parent_docids: &RoaringBitmap,
-    union_cache: &mut HashMap<(usize, u8), RoaringBitmap>,
-    answer: &mut RoaringBitmap,
+    words: &[(HashMap<String, (u8, Bitmap)>, Bitmap)],
+    candidates: &Bitmap,
+    parent_docids: &Bitmap,
+    union_cache: &mut HashMap<(usize, u8), Bitmap>,
+    answer: &mut Bitmap,
 ) -> anyhow::Result<()>
 {
     use std::cmp::{min, max};
@@ -113,14 +113,14 @@ fn mdfs_step(
         let mut docids = match union_cache.entry((words.len(), proximity)) {
             Occupied(entry) => entry.get().clone(),
             Vacant(entry) => {
-                let mut docids = RoaringBitmap::new();
+                let mut docids = Bitmap::create();
                 if proximity == 8 {
                     docids = candidates.clone();
                 } else {
                     for (w1, w2) in pairs.iter().cloned() {
                         let key = (w1, w2, proximity);
                         if let Some(di) = index.word_pair_proximity_docids.get(rtxn, &key)? {
-                            docids.union_with(&di);
+                            docids.or_inplace(&di);
                         }
                     }
                 }
@@ -129,13 +129,13 @@ fn mdfs_step(
         };
 
         // We must be sure that we only return docids that are present in the candidates.
-        docids.intersect_with(parent_docids);
+        docids.and_inplace(parent_docids);
 
         if !docids.is_empty() {
             let mana = mana.checked_sub(proximity as u32).unwrap();
             if tail.len() < 2 {
                 // We are the last pair, we return without recuring as we don't have any child.
-                answer.union_with(&docids);
+                answer.or_inplace(&docids);
                 return Ok(());
             } else {
                 return mdfs_step(index, rtxn, mana, tail, candidates, &docids, union_cache, answer);
@@ -147,14 +147,14 @@ fn mdfs_step(
 }
 
 fn words_pair_combinations<'h>(
-    w1: &'h HashMap<String, (u8, RoaringBitmap)>,
-    w2: &'h HashMap<String, (u8, RoaringBitmap)>,
+    w1: &'h HashMap<String, (u8, Bitmap)>,
+    w2: &'h HashMap<String, (u8, Bitmap)>,
 ) -> Vec<(&'h str, &'h str)>
 {
     let mut pairs = Vec::new();
     for (w1, (_typos, docids1)) in w1 {
         for (w2, (_typos, docids2)) in w2 {
-            if !docids1.is_disjoint(&docids2) {
+            if docids1.and_cardinality(&docids2) != 0 {
                 pairs.push((w1.as_str(), w2.as_str()));
             }
         }

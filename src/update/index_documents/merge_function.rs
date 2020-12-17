@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use anyhow::{bail, ensure, Context};
 use bstr::ByteSlice as _;
 use fst::IntoStreamer;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::heed_codec::CboRoaringBitmapCodec;
 
@@ -78,16 +78,14 @@ pub fn merge_two_obkvs(base: obkv::KvReader, update: obkv::KvReader, buffer: &mu
 
 fn roaring_bitmap_merge(values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
     let (head, tail) = values.split_first().unwrap();
-    let mut head = RoaringBitmap::deserialize_from(&head[..])?;
+    let mut head = Bitmap::try_deserialize(&head[..]).context("invalid bitmap")?;
 
     for value in tail {
-        let bitmap = RoaringBitmap::deserialize_from(&value[..])?;
-        head.union_with(&bitmap);
+        let bitmap = Bitmap::try_deserialize(&value[..]).context("invalid bitmap")?;
+        head.or_inplace(&bitmap);
     }
 
-    let mut vec = Vec::with_capacity(head.serialized_size());
-    head.serialize_into(&mut vec)?;
-    Ok(vec)
+    Ok(head.serialize())
 }
 
 fn cbo_roaring_bitmap_merge(values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
@@ -96,7 +94,7 @@ fn cbo_roaring_bitmap_merge(values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
 
     for value in tail {
         let bitmap = CboRoaringBitmapCodec::deserialize_from(&value[..])?;
-        head.union_with(&bitmap);
+        head.or_inplace(&bitmap);
     }
 
     let mut vec = Vec::new();

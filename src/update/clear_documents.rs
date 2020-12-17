@@ -1,4 +1,4 @@
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 use crate::{ExternalDocumentsIds, Index};
 
 pub struct ClearDocuments<'t, 'u, 'i> {
@@ -30,11 +30,11 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
         // We clean some of the main engine datastructures.
         self.index.put_words_fst(self.wtxn, &fst::Set::default())?;
         self.index.put_external_documents_ids(self.wtxn, &ExternalDocumentsIds::default())?;
-        self.index.put_documents_ids(self.wtxn, &RoaringBitmap::default())?;
+        self.index.put_documents_ids(self.wtxn, &Bitmap::create())?;
 
         // We clean all the faceted documents ids.
         for (field_id, _) in faceted_fields {
-            self.index.put_faceted_documents_ids(self.wtxn, field_id, &RoaringBitmap::default())?;
+            self.index.put_faceted_documents_ids(self.wtxn, field_id, &Bitmap::create())?;
         }
 
         // Clear the other databases.

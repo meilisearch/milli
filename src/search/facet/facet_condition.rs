@@ -9,7 +9,7 @@ use num_traits::Bounded;
 use pest::error::{Error as PestError, ErrorVariant};
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
-use roaring::RoaringBitmap;
+use croaring::Bitmap;
 
 use crate::facet::FacetType;
 use crate::heed_codec::facet::FacetValueStringCodec;
@@ -355,7 +355,7 @@ impl FacetCondition {
         level: u8,
         left: Bound<T>,
         right: Bound<T>,
-        output: &mut RoaringBitmap,
+        output: &mut Bitmap,
     ) -> anyhow::Result<()>
     where
         T: Copy + PartialEq + PartialOrd + Bounded + Debug,
@@ -386,8 +386,8 @@ impl FacetCondition {
 
         for (i, result) in iter.enumerate() {
             let ((_fid, level, l, r), docids) = result?;
-            debug!("{:?} to {:?} (level {}) found {} documents", l, r, level, docids.len());
-            output.union_with(&docids);
+            debug!("{:?} to {:?} (level {}) found {} documents", l, r, level, docids.cardinality());
+            output.or_inplace(&docids);
             // We save the leftest and rightest bounds we actually found at this level.
             if i == 0 { left_found = Some(l); }
             right_found = Some(r);
@@ -431,7 +431,7 @@ impl FacetCondition {
         db: heed::Database<ByteSlice, CboRoaringBitmapCodec>,
         field_id: FieldId,
         operator: FacetNumberOperator<T>,
-    ) -> anyhow::Result<RoaringBitmap>
+    ) -> anyhow::Result<Bitmap>
     where
         T: Copy + PartialEq + PartialOrd + Bounded + Debug,
         KC: heed::BytesDecode<'t, DItem = (u8, u8, T, T)>,
@@ -463,11 +463,11 @@ impl FacetCondition {
 
         match biggest_level {
             Some(level) => {
-                let mut output = RoaringBitmap::new();
+                let mut output = Bitmap::create();
                 Self::explore_facet_levels::<T, KC>(rtxn, db, field_id, level, left, right, &mut output)?;
                 Ok(output)
             },
-            None => Ok(RoaringBitmap::new()),
+            None => Ok(Bitmap::create()),
         }
     }
 
@@ -477,13 +477,13 @@ impl FacetCondition {
         db: heed::Database<FacetValueStringCodec, CboRoaringBitmapCodec>,
         field_id: FieldId,
         operator: &FacetStringOperator,
-    ) -> anyhow::Result<RoaringBitmap>
+    ) -> anyhow::Result<Bitmap>
     {
         match operator {
             FacetStringOperator::Equal(string) => {
                 match db.get(rtxn, &(field_id, string))? {
                     Some(docids) => Ok(docids),
-                    None => Ok(RoaringBitmap::new())
+                    None => Ok(Bitmap::create())
                 }
             },
             FacetStringOperator::NotEqual(string) => {
@@ -499,7 +499,7 @@ impl FacetCondition {
         &self,
         rtxn: &heed::RoTxn,
         index: &Index,
-    ) -> anyhow::Result<RoaringBitmap>
+    ) -> anyhow::Result<Bitmap>
     {
         let db = index.facet_field_id_value_docids;
         match self {
