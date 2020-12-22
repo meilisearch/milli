@@ -313,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
     let index_cloned = index.clone();
     let indexer_opt_cloned = opt.indexer.clone();
     let update_store = UpdateStore::open(
-        opt.update_database_size.get_bytes() as usize,
+        Some(opt.update_database_size.get_bytes() as usize),
         update_store_path,
         // the type hint is necessary: https://github.com/rust-lang/rust/issues/32600
         move |update_id, meta, content:&_| {

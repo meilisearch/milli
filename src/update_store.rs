@@ -31,7 +31,7 @@ where F: FnMut(u64, M, &[u8]) -> heed::Result<N> + Send + 'static {
 
 impl<M: 'static, N: 'static> UpdateStore<M, N> {
     pub fn open<P, U>(
-        size: usize,
+        size: Option<usize>,
         path: P,
         mut update_handler: U,
     ) -> heed::Result<Arc<UpdateStore<M, N>>>
@@ -42,7 +42,9 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
         N: Serialize,
     {
         let mut options = EnvOpenOptions::new();
-        options.map_size(size);
+        if let Some(size) = size {
+            options.map_size(size);
+        }
         options.max_dbs(4);
 
         let env = options.open(path)?;
@@ -311,8 +313,7 @@ mod tests {
     #[test]
     fn simple() {
         let dir = tempfile::tempdir().unwrap();
-        let options = EnvOpenOptions::new();
-        let update_store = UpdateStore::open(options, dir, |_id, meta: String, _content:&_| {
+        let update_store = UpdateStore::open(None, dir, |_id, meta: String, _content:&_| {
             Ok(meta + " processed")
         }).unwrap();
 
@@ -329,8 +330,7 @@ mod tests {
     #[ignore]
     fn long_running_update() {
         let dir = tempfile::tempdir().unwrap();
-        let options = EnvOpenOptions::new();
-        let update_store = UpdateStore::open(options, dir, |_id, meta: String, _content:&_| {
+        let update_store = UpdateStore::open(None, dir, |_id, meta: String, _content:&_| {
             thread::sleep(Duration::from_millis(400));
             Ok(meta + " processed")
         }).unwrap();
