@@ -532,15 +532,13 @@ impl FacetCondition {
 mod tests {
     use super::*;
     use crate::update::Settings;
-    use heed::EnvOpenOptions;
     use maplit::hashmap;
 
     #[test]
     fn string() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();
@@ -567,9 +565,8 @@ mod tests {
     #[test]
     fn i64() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();
@@ -595,9 +592,8 @@ mod tests {
     #[test]
     fn parentheses() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();

@@ -6,7 +6,6 @@ use std::time::Instant;
 
 use anyhow::Context;
 use byte_unit::Byte;
-use heed::EnvOpenOptions;
 use log::debug;
 use structopt::StructOpt;
 
@@ -41,11 +40,10 @@ pub fn run(opt: Opt) -> anyhow::Result<()> {
         .init()?;
 
     std::fs::create_dir_all(&opt.database)?;
-    let mut options = EnvOpenOptions::new();
-    options.map_size(opt.database_size.get_bytes() as usize);
 
     // Open the LMDB database.
-    let index = Index::new(options, &opt.database)?;
+    let db_size = opt.database_size.get_bytes() as usize;
+    let index = Index::new(&opt.database, Some(db_size))?;
     let rtxn = index.read_txn()?;
 
     let stdin = io::stdin();

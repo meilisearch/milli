@@ -641,14 +641,12 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use heed::EnvOpenOptions;
 
     #[test]
     fn simple_document_replacement() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -696,9 +694,8 @@ mod tests {
     #[test]
     fn simple_document_merge() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with duplicate ids and
         // change the index method to merge documents.
@@ -760,9 +757,8 @@ mod tests {
     #[test]
     fn not_auto_generated_csv_documents_ids() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -783,9 +779,8 @@ mod tests {
     #[test]
     fn not_auto_generated_json_documents_ids() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents and 2 without ids.
         let mut wtxn = index.write_txn().unwrap();
@@ -810,9 +805,8 @@ mod tests {
     #[test]
     fn simple_auto_generated_documents_ids() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -863,9 +857,8 @@ mod tests {
     #[test]
     fn reordered_auto_generated_documents_ids() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -899,9 +892,8 @@ mod tests {
     #[test]
     fn empty_csv_update() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 0 documents and only headers.
         let mut wtxn = index.write_txn().unwrap();
@@ -921,9 +913,8 @@ mod tests {
     #[test]
     fn json_documents() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with an id for only one of them.
         let mut wtxn = index.write_txn().unwrap();
@@ -947,9 +938,8 @@ mod tests {
     #[test]
     fn empty_json_update() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 0 documents.
         let mut wtxn = index.write_txn().unwrap();
@@ -969,9 +959,8 @@ mod tests {
     #[test]
     fn json_stream_documents() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with an id for only one of them.
         let mut wtxn = index.write_txn().unwrap();
@@ -995,9 +984,8 @@ mod tests {
     #[test]
     fn invalid_documents_ids() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 1 document with an invalid id.
         let mut wtxn = index.write_txn().unwrap();
@@ -1027,9 +1015,8 @@ mod tests {
     #[test]
     fn complex_json_documents() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with an id for only one of them.
         let mut wtxn = index.write_txn().unwrap();

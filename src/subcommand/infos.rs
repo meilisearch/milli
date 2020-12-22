@@ -5,7 +5,6 @@ use std::{str, io, fmt};
 use anyhow::Context;
 use byte_unit::Byte;
 use crate::Index;
-use heed::EnvOpenOptions;
 use structopt::StructOpt;
 
 use Command::*;
@@ -160,11 +159,9 @@ pub fn run(opt: Opt) -> anyhow::Result<()> {
         .timestamp(stderrlog::Timestamp::Off)
         .init()?;
 
-    let mut options = EnvOpenOptions::new();
-    options.map_size(opt.database_size.get_bytes() as usize);
-
     // Open the LMDB database.
-    let index = Index::new(options, opt.database)?;
+    let db_size = opt.database_size.get_bytes() as usize;
+    let index = Index::new(opt.database, Some(db_size))?;
     let rtxn = index.read_txn()?;
 
     match opt.command {

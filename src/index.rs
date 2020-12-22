@@ -49,7 +49,11 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> anyhow::Result<Index> {
+    pub fn new<P: AsRef<Path>>(path: P, size: Option<usize>) -> anyhow::Result<Index> {
+        let mut options = heed::EnvOpenOptions::new();
+        if let Some(size) = size {
+            options.map_size(size);
+        }
         options.max_dbs(7);
 
         let env = options.open(path)?;

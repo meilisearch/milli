@@ -280,8 +280,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use heed::EnvOpenOptions;
+    use crate::update::{IndexDocuments, UpdateFormat};
     use maplit::hashmap;
 
     use crate::facet::FacetType;
@@ -290,9 +289,8 @@ mod tests {
     #[test]
     fn set_and_reset_searchable_fields() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -345,9 +343,8 @@ mod tests {
     #[test]
     fn mixup_searchable_with_displayed_fields() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -389,9 +386,8 @@ mod tests {
     #[test]
     fn default_displayed_fields() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -433,9 +429,8 @@ mod tests {
     #[test]
     fn set_and_reset_displayed_field() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // First we send 3 documents with ids from 1 to 3.
         let mut wtxn = index.write_txn().unwrap();
@@ -473,9 +468,8 @@ mod tests {
     #[test]
     fn set_faceted_fields() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let db_size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(db_size)).unwrap();
 
         // Set the faceted fields to be the age.
         let mut wtxn = index.write_txn().unwrap();

@@ -16,7 +16,6 @@ use flate2::read::GzDecoder;
 use futures::stream;
 use futures::{FutureExt, StreamExt};
 use grenad::CompressionType;
-use heed::EnvOpenOptions;
 use once_cell::sync::OnceCell;
 use rayon::ThreadPool;
 use serde::{Serialize, Deserialize, Deserializer};
@@ -294,8 +293,6 @@ async fn main() -> anyhow::Result<()> {
         .init()?;
 
     create_dir_all(&opt.database)?;
-    let mut options = EnvOpenOptions::new();
-    options.map_size(opt.database_size.get_bytes() as usize);
 
     // Setup the global thread pool
     let jobs = opt.indexer.indexing_jobs.unwrap_or(0);
@@ -303,7 +300,7 @@ async fn main() -> anyhow::Result<()> {
     GLOBAL_THREAD_POOL.set(pool).unwrap();
 
     // Open the LMDB database.
-    let index = Index::new(options, &opt.database)?;
+    let index = Index::new(&opt.database, None)?;
 
     let update_store_path = opt.database.join("updates.mdb");
     create_dir_all(&update_store_path)?;
