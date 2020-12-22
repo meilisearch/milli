@@ -305,10 +305,6 @@ async fn main() -> anyhow::Result<()> {
     // Open the LMDB database.
     let index = Index::new(options, &opt.database)?;
 
-    // Setup the LMDB based update database.
-    let mut update_store_options = EnvOpenOptions::new();
-    update_store_options.map_size(opt.update_database_size.get_bytes() as usize);
-
     let update_store_path = opt.database.join("updates.mdb");
     create_dir_all(&update_store_path)?;
 
@@ -317,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
     let index_cloned = index.clone();
     let indexer_opt_cloned = opt.indexer.clone();
     let update_store = UpdateStore::open(
-        update_store_options,
+        opt.update_database_size.get_bytes() as usize,
         update_store_path,
         // the type hint is necessary: https://github.com/rust-lang/rust/issues/32600
         move |update_id, meta, content:&_| {

@@ -31,7 +31,7 @@ where F: FnMut(u64, M, &[u8]) -> heed::Result<N> + Send + 'static {
 
 impl<M: 'static, N: 'static> UpdateStore<M, N> {
     pub fn open<P, U>(
-        mut options: EnvOpenOptions,
+        size: usize,
         path: P,
         mut update_handler: U,
     ) -> heed::Result<Arc<UpdateStore<M, N>>>
@@ -41,7 +41,10 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
         M: for<'a> Deserialize<'a>,
         N: Serialize,
     {
+        let mut options = EnvOpenOptions::new();
+        options.map_size(size);
         options.max_dbs(4);
+
         let env = options.open(path)?;
         let pending_meta = env.create_database(Some("pending-meta"))?;
         let pending = env.create_database(Some("pending"))?;
