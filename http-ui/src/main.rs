@@ -180,6 +180,7 @@ impl<'a, A: AsRef<[u8]>> Highlighter<'a, A> {
     }
 }
 
+
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate {
