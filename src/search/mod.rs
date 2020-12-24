@@ -311,13 +311,14 @@ impl<'a> Search<'a> {
             (Some(facet_candidates), None) => {
                 // If the query is not set or results in no DFAs but
                 // there is some facet conditions we return a placeholder.
+                let nb_hits = facet_candidates.len() as usize;
                 let documents_ids = match order_by_facet {
                     Some((fid, ftype, is_ascending)) => {
                         self.facet_ordered(fid, ftype, is_ascending, facet_candidates, limit)?
                     },
                     None => facet_candidates.iter().take(limit).collect(),
                 };
-                return Ok(SearchResult { documents_ids, ..Default::default() })
+                return Ok(SearchResult { documents_ids, nb_hits, ..Default::default() })
             },
             (None, None) => {
                 // If the query is not set or results in no DFAs we return a placeholder.
@@ -328,10 +329,12 @@ impl<'a> Search<'a> {
                     },
                     None => documents_ids.iter().take(limit).collect(),
                 };
-                return Ok(SearchResult { documents_ids, ..Default::default() })
+                let nb_hits = self.index.number_of_documents(self.rtxn)?;
+                return Ok(SearchResult { documents_ids, nb_hits, ..Default::default() })
             },
         };
 
+        let nb_hits = candidates.len() as usize;
         debug!("candidates: {:?} took {:.02?}", candidates, before.elapsed());
 
         // The mana depth first search is a revised DFS that explore
@@ -364,7 +367,7 @@ impl<'a> Search<'a> {
             None => documents.into_iter().flatten().take(limit).collect(),
         };
 
-        Ok(SearchResult { found_words, documents_ids })
+        Ok(SearchResult { found_words, documents_ids, nb_hits })
     }
 }
 
@@ -385,4 +388,5 @@ pub struct SearchResult {
     pub found_words: HashSet<String>,
     // TODO those documents ids should be associated with their criteria scores.
     pub documents_ids: Vec<DocumentId>,
+    pub nb_hits: usize,
 }
