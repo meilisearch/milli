@@ -30,7 +30,8 @@ use meilisearch_tokenizer::{Analyzer, AnalyzerConfig};
 
 use milli::update::UpdateIndexingStep::*;
 use milli::update::{UpdateBuilder, IndexDocumentsMethod, UpdateFormat};
-use milli::{obkv_to_json, Index, UpdateStore, SearchResult, FacetCondition};
+use milli::{obkv_to_json, Index, SearchResult, FacetCondition};
+use milli::update_store::{UpdateStore, Aborted, Pending, Processed};
 
 static GLOBAL_THREAD_POOL: OnceCell<ThreadPool> = OnceCell::new();
 
@@ -200,10 +201,10 @@ struct UpdatesTemplate<M: Serialize + Send, P: Serialize + Send, N: Serialize + 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 enum UpdateStatus<M, P, N> {
-    Pending { update_id: u64, meta: M },
+    Pending { update_id: u64, meta: Pending<M> },
     Progressing { update_id: u64, meta: P },
-    Processed { update_id: u64, meta: N },
-    Aborted { update_id: u64, meta: M },
+    Processed { update_id: u64, meta: Processed<N> },
+    Aborted { update_id: u64, meta: Aborted<M> },
 }
 
 impl<M, P, N> UpdateStatus<M, P, N> {
@@ -313,7 +314,7 @@ async fn main() -> anyhow::Result<()> {
         Some(opt.update_database_size.get_bytes() as usize),
         update_store_path,
         // the type hint is necessary: https://github.com/rust-lang/rust/issues/32600
-        move |update_id, meta, content:&_| {
+        move |update_id, pending: Pending<UpdateMeta>, content:&_| {
             // We prepare the update by using the update builder.
             let mut update_builder = UpdateBuilder::new(update_id);
             if let Some(max_nb_chunks) = indexer_opt_cloned.max_nb_chunks {
@@ -331,7 +332,7 @@ async fn main() -> anyhow::Result<()> {
 
             let before_update = Instant::now();
             // we extract the update type and execute the update itself.
-            let result: anyhow::Result<()> = match meta {
+            let result: anyhow::Result<()> = match pending.meta() {
                 UpdateMeta::DocumentsAddition { method, format, encoding } => {
                     // We must use the write transaction of the update here.
                     let mut wtxn = index_cloned.write_txn()?;
@@ -395,28 +396,28 @@ async fn main() -> anyhow::Result<()> {
                     let mut builder = update_builder.settings(&mut wtxn, &index_cloned);
 
                     // We transpose the settings JSON struct into a real setting update.
-                    if let Some(names) = settings.searchable_attributes {
+                    if let Some(ref names) = settings.searchable_attributes {
                         match names {
-                            Some(names) => builder.set_searchable_fields(names),
+                            Some(names) => builder.set_searchable_fields(&names),
                             None => builder.reset_searchable_fields(),
                         }
                     }
 
                     // We transpose the settings JSON struct into a real setting update.
-                    if let Some(names) = settings.displayed_attributes {
+                    if let Some(ref names) = settings.displayed_attributes {
                         match names {
-                            Some(names) => builder.set_displayed_fields(names),
+                            Some(names) => builder.set_displayed_fields(&names),
                             None => builder.reset_displayed_fields(),
                         }
                     }
 
                     // We transpose the settings JSON struct into a real setting update.
-                    if let Some(facet_types) = settings.faceted_attributes {
+                    if let Some(ref facet_types) = settings.faceted_attributes {
                         builder.set_faceted_fields(facet_types);
                     }
 
                     // We transpose the settings JSON struct into a real setting update.
-                    if let Some(criteria) = settings.criteria {
+                    if let Some(ref criteria) = settings.criteria {
                         match criteria {
                             Some(criteria) => builder.set_criteria(criteria),
                             None => builder.reset_criteria(),
@@ -468,10 +469,12 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => format!("error while processing update content: {:?}", e),
             };
 
-            let processed = UpdateStatus::Processed { update_id, meta: meta.clone() };
+            let processed_meta = pending.process(meta);
+
+            let processed = UpdateStatus::Processed { update_id, meta: processed_meta.clone() };
             let _ = update_status_sender_cloned.send(processed);
 
-            Ok(meta)
+            Ok(processed_meta)
         })?;
 
     // The database name will not change.
@@ -644,7 +647,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            let SearchResult { found_words, documents_ids } = search.execute().unwrap();
+            let SearchResult { found_words, documents_ids, .. } = search.execute().unwrap();
 
             let mut documents = Vec::new();
             let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
@@ -741,7 +744,7 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let meta = UpdateMeta::DocumentsAddition { method, format, encoding };
-        let update_id = update_store.register_update(&meta, &mmap[..]).unwrap();
+        let (update_id, meta) = update_store.register_update(meta, &mmap[..]).unwrap();
         let _ = update_status_sender.send(UpdateStatus::Pending { update_id, meta });
         eprintln!("update {} registered", update_id);
 
@@ -785,8 +788,8 @@ async fn main() -> anyhow::Result<()> {
         .and(warp::path!("clear-documents"))
         .map(move || {
             let meta = UpdateMeta::ClearDocuments;
-            let update_id = update_store_cloned.register_update(&meta, &[]).unwrap();
-            let _ = update_status_sender_cloned.send(UpdateStatus::Pending { update_id, meta });
+            let (update_id, pending) = update_store_cloned.register_update(meta, &[]).unwrap();
+            let _ = update_status_sender_cloned.send(UpdateStatus::Pending { update_id, meta: pending });
             eprintln!("update {} registered", update_id);
             Ok(warp::reply())
         });
@@ -798,7 +801,7 @@ async fn main() -> anyhow::Result<()> {
         .and(warp::body::json())
         .map(move |settings: Settings| {
             let meta = UpdateMeta::Settings(settings);
-            let update_id = update_store_cloned.register_update(&meta, &[]).unwrap();
+            let (update_id, meta) = update_store_cloned.register_update(meta, &[]).unwrap();
             let _ = update_status_sender_cloned.send(UpdateStatus::Pending { update_id, meta });
             eprintln!("update {} registered", update_id);
             Ok(warp::reply())
@@ -811,7 +814,7 @@ async fn main() -> anyhow::Result<()> {
         .and(warp::body::json())
         .map(move |levels: Facets| {
             let meta = UpdateMeta::Facets(levels);
-            let update_id = update_store_cloned.register_update(&meta, &[]).unwrap();
+            let (update_id, meta) = update_store_cloned.register_update(meta, &[]).unwrap();
             let _ = update_status_sender_cloned.send(UpdateStatus::Pending { update_id, meta });
             eprintln!("update {} registered", update_id);
             warp::reply()

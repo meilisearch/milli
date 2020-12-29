@@ -1042,10 +1042,14 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 name = "meilisearch-tokenizer"
 version = "0.1.1"
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/meilisearch/Tokenizer.git?branch=main#147b6154b1b34cb8f5da2df6a416b7da191bc850"
 =======
 source = "git+https://github.com/meilisearch/Tokenizer.git?branch=token-eq#daeb4a4ac91081f1c592e3ebb3ec5d8dcb4e6976"
 >>>>>>> 0b9ccd0 (highlight with new tokenizer)
+=======
+source = "git+https://github.com/meilisearch/Tokenizer.git?branch=main#147b6154b1b34cb8f5da2df6a416b7da191bc850"
+>>>>>>> af2dc0b (Use of types to encapsulate state changes)
 dependencies = [
  "character_converter",
  "cow-utils",
@@ -1120,6 +1124,7 @@ dependencies = [
  "roaring",
  "serde",
  "serde_json",
+ "serde_millis",
  "slice-group-by",
  "smallstr",
  "smallvec",
@@ -1870,6 +1875,15 @@ dependencies = [
  "indexmap",
  "itoa",
  "ryu",
+ "serde",
+]
+
+[[package]]
+name = "serde_millis"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6e2dc780ca5ee2c369d1d01d100270203c4ff923d2a4264812d723766434d00"
+dependencies = [
  "serde",
 ]
 
