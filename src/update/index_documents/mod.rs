@@ -33,6 +33,11 @@ mod merge_function;
 mod store;
 mod transform;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DocumentAdditionResult {
+    nb_documents: usize,
+}
+
 #[derive(Debug, Copy, Clone)]
 pub enum WriteMethod {
     Append,
@@ -260,7 +265,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         self.autogenerate_docids = false;
     }
 
-    pub fn execute<R, F>(self, reader: R, progress_callback: F) -> anyhow::Result<()>
+    pub fn execute<R, F>(self, reader: R, progress_callback: F) -> anyhow::Result<DocumentAdditionResult>
     where
         R: io::Read,
         F: Fn(UpdateIndexingStep, u64) + Sync,
@@ -290,9 +295,12 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
             UpdateFormat::JsonStream => transform.output_from_json_stream(reader, &progress_callback)?,
         };
 
+        let nb_documents = output.documents_count;
+
         info!("Update transformed in {:.02?}", before_transform.elapsed());
 
-        self.execute_raw(output, progress_callback)
+        self.execute_raw(output, progress_callback)?;
+        Ok(DocumentAdditionResult { nb_documents })
     }
 
     pub fn execute_raw<F>(self, output: TransformOutput, progress_callback: F) -> anyhow::Result<()>
