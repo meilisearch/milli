@@ -543,7 +543,7 @@ mod tests {
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 0);
-        builder.set_faceted_fields(&hashmap!{ "channel".into() => "string".into() });
+        builder.set_faceted_fields(hashmap!{ "channel".into() => "string".into() });
         builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -571,7 +571,7 @@ mod tests {
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 0);
-        builder.set_faceted_fields(&hashmap!{ "timestamp".into() => "integer".into() });
+        builder.set_faceted_fields(hashmap!{ "timestamp".into() => "integer".into() });
         builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -598,8 +598,8 @@ mod tests {
         // Set the faceted fields to be the channel.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 0);
-        builder.set_searchable_fields(&vec!["channel".into(), "timestamp".into()]); // to keep the fields order
-        builder.set_faceted_fields(&hashmap!{
+        builder.set_searchable_fields(vec!["channel".into(), "timestamp".into()]); // to keep the fields order
+        builder.set_faceted_fields(hashmap!{
             "channel".into() => "string".into(),
             "timestamp".into() => "integer".into(),
         });

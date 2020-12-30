@@ -62,16 +62,16 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.searchable_fields = Some(None);
     }
 
-    pub fn set_searchable_fields(&mut self, names: &[String]) {
-        self.searchable_fields = Some(Some(names.to_vec()));
+    pub fn set_searchable_fields(&mut self, names: Vec<String>) {
+        self.searchable_fields = Some(Some(names));
     }
 
     pub fn reset_displayed_fields(&mut self) {
         self.displayed_fields = Some(None);
     }
 
-    pub fn set_displayed_fields(&mut self, names: &[String]) {
-        self.displayed_fields = Some(Some(names.to_vec()));
+    pub fn set_displayed_fields(&mut self, names: Vec<String>) {
+        self.displayed_fields = Some(Some(names));
     }
 
     pub fn set_faceted_fields(&mut self, names_facet_types: HashMap<String, String>) {
@@ -86,7 +86,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.criteria = Some(None);
     }
 
-    pub fn set_criteria(&mut self, criteria: &[String]) {
+    pub fn set_criteria(&mut self, criteria: Vec<String>) {
         self.criteria = Some(Some(criteria.to_vec()));
     }
 
@@ -303,7 +303,7 @@ mod tests {
         // We change the searchable fields to be the "name" field only.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 1);
-        builder.set_searchable_fields(&vec!["name".into()]);
+        builder.set_searchable_fields(vec!["name".into()]);
         builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -358,8 +358,8 @@ mod tests {
         // We also change the searchable fields to be the "name" field only.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 1);
-        builder.set_displayed_fields(&vec!["age".into()]);
-        builder.set_searchable_fields(&vec!["name".into()]);
+        builder.set_displayed_fields(vec!["age".into()]);
+        builder.set_searchable_fields(vec!["name".into()]);
         builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -441,7 +441,7 @@ mod tests {
 
         // In the same transaction we change the displayed fields to be only the age.
         let mut builder = Settings::new(&mut wtxn, &index, 0);
-        builder.set_displayed_fields(&vec!["age".into()]);
+        builder.set_displayed_fields(vec!["age".into()]);
         builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -474,7 +474,7 @@ mod tests {
         // Set the faceted fields to be the age.
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, 0);
-        builder.set_faceted_fields(&hashmap!{ "age".into() => "integer".into() });
+        builder.set_faceted_fields(hashmap!{ "age".into() => "integer".into() });
         builder.execute(|_, _| ()).unwrap();
 
         // Then index some documents.
