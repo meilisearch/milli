@@ -225,6 +225,7 @@ impl<M: 'static, N: 'static, E: 'static> UpdateStore<M, N, E> {
             heed::RoIter<'a, OwnedType<BEU64>, SerdeJson<Processed<M, N>>>,
             heed::RoIter<'a, OwnedType<BEU64>, SerdeJson<Aborted<M>>>,
             heed::RoIter<'a, OwnedType<BEU64>, SerdeJson<Pending<M>>>,
+            heed::RoIter<'a, OwnedType<BEU64>, SerdeJson<Failed<M, E>>>,
         ) -> heed::Result<T>,
     {
         let rtxn = self.env.read_txn()?;
@@ -234,9 +235,10 @@ impl<M: 'static, N: 'static, E: 'static> UpdateStore<M, N, E> {
         let aborted_iter = self.aborted_meta.iter(&rtxn)?;
         let pending_iter = self.pending_meta.iter(&rtxn)?;
         let processing = self.processing.read().unwrap().clone();
+        let failed_iter = self.failed_meta.iter(&rtxn)?;
 
         // We execute the user defined function with both iterators.
-        (f)(processing, processed_iter, aborted_iter, pending_iter)
+        (f)(processing, processed_iter, aborted_iter, pending_iter, failed_iter)
     }
 
     /// Returns the update associated meta or `None` if the update doesn't exist.
@@ -384,6 +386,12 @@ pub struct Processed<M, N> {
     from: Processing<M>,
 }
 
+impl<M, N> Processed<M, N> {
+    fn id(&self) -> u64 {
+        self.from.id()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub struct Processing<M> {
     #[serde(flatten)]
@@ -424,12 +432,24 @@ pub struct Aborted<M> {
     aborted_at: DateTime<Utc>,
 }
 
+impl<M> Aborted<M> {
+    fn id(&self) -> u64 {
+        self.from.id()
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
 pub struct Failed<M, E> {
     #[serde(flatten)]
     from: Processing<M>,
     error: E,
     failed_at: DateTime<Utc>,
+}
+
+impl<M, E> Failed<M, E> {
+    fn id(&self) -> u64 {
+        self.from.id()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Serialize)]
@@ -440,6 +460,18 @@ pub enum UpdateStatus<M, N, E> {
     Processed(Processed<M, N>),
     Aborted(Aborted<M>),
     Failed(Failed<M, E>),
+}
+
+impl<M, N, E> UpdateStatus<M, N, E> {
+    pub fn id(&self) -> u64 {
+        match self {
+            UpdateStatus::Processing(u) => u.id(),
+            UpdateStatus::Pending(u) => u.id(),
+            UpdateStatus::Processed(u) => u.id(),
+            UpdateStatus::Aborted(u) => u.id(),
+            UpdateStatus::Failed(u) => u.id(),
+        }
+    }
 }
 
 impl<M, N, E> From<Pending<M>> for UpdateStatus<M, N, E> {
@@ -457,6 +489,18 @@ impl<M, N, E> From<Aborted<M>> for UpdateStatus<M, N, E> {
 impl<M, N, E> From<Processed<M, N>> for UpdateStatus<M, N, E> {
     fn from(other: Processed<M, N>) -> Self {
         Self::Processed(other)
+    }
+}
+
+impl<M, N, E> From<Processing<M>> for UpdateStatus<M, N, E> {
+    fn from(other: Processing<M>) -> Self {
+        Self::Processing(other)
+    }
+}
+
+impl<M, N, E> From<Failed<M, E>> for UpdateStatus<M, N, E> {
+    fn from(other: Failed<M, E>) -> Self {
+        Self::Failed(other)
     }
 }
 
