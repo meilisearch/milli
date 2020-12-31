@@ -195,10 +195,6 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             // We remap the documents fields based on the new `FieldsIdsMap`.
             let output = transform.remap_index_documents(primary_key, fields_ids_map.clone())?;
 
-            // We write the new FieldsIdsMap to the database
-            // this way next indexing methods will be based on that.
-            self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
-
             if let Some(faceted_fields) = updated_faceted_fields {
                 // We write the faceted_fields fields into the database here.
                 self.index.put_faceted_fields(self.wtxn, &faceted_fields)?;
@@ -243,6 +239,10 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 None => self.index.delete_criteria(self.wtxn).map(drop)?,
             }
         }
+
+        // We write the new FieldsIdsMap to the database
+        // this way next indexing methods will be based on that.
+        self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
 
         Ok(())
     }
