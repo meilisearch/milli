@@ -381,6 +381,28 @@ mod tests {
     }
 
     #[test]
+    fn set_displayed_fields_empty_db() {
+        let path = tempfile::tempdir().unwrap();
+        let mut options = EnvOpenOptions::new();
+        options.map_size(10 * 1024 * 1024); // 10 MB
+        let index = Index::new(options, &path).unwrap();
+
+        {
+            let mut wtxn = index.write_txn().unwrap();
+            let mut builder = Settings::new(&mut wtxn, &index);
+            builder.set_displayed_fields(vec!["age".into()]);
+            builder.execute(|_| ()).unwrap();
+            wtxn.commit().unwrap();
+        }
+
+        let rtxn = index.read_txn().unwrap();
+        let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
+        let age_field_id = fields_ids_map.id("age").unwrap();
+        let fields_ids = index.displayed_fields(&rtxn).unwrap();
+        assert_eq!(fields_ids.unwrap(), &[age_field_id][..]);
+    }
+
+    #[test]
     fn set_and_reset_displayed_field() {
         let path = tempfile::tempdir().unwrap();
         let mut options = EnvOpenOptions::new();
