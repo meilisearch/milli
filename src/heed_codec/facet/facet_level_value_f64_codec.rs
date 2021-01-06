@@ -27,7 +27,7 @@ impl<'a> heed::BytesDecode<'a> for FacetLevelValueF64Codec {
     }
 }
 
-impl heed::BytesEncode<'_> for FacetLevelValueF64Codec {
+impl heed::BytesEncode for FacetLevelValueF64Codec {
     type EItem = (FieldId, u8, f64, f64);
 
     fn bytes_encode((field_id, level, left, right): &Self::EItem) -> Option<Cow<[u8]>> {

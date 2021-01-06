@@ -1,19 +1,23 @@
-use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::{str, io, fmt};
 
 use anyhow::Context;
 use byte_unit::Byte;
-use crate::Index;
 use heed::EnvOpenOptions;
+use heed::types::ByteSlice;
 use structopt::StructOpt;
+
+use crate::{Index, CboRoaringBitmapCodec};
 
 use Command::*;
 
 const MAIN_DB_NAME: &str = "main";
-const WORD_DOCIDS_DB_NAME: &str = "word-docids";
-const DOCID_WORD_POSITIONS_DB_NAME: &str = "docid-word-positions";
-const WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME: &str = "word-pair-proximity-docids";
+const WORD_DOCIDS_DB_NAME: &str = "word_docids";
+const DOCID_WORD_POSITIONS_DB_NAME: &str = "docid_word_positions";
+const WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME: &str = "word_pair_proximity_docids";
+const FACET_FIELD_ID_STR_DOCIDS_DB_NAME: &str = "facet_field_id_str_docids";
+const FACET_FIELD_ID_F64_DOCIDS_DB_NAME: &str = "facet_field_id_f64_docids";
+const FACET_FIELD_ID_I64_DOCIDS_DB_NAME: &str = "facet_field_id_i64_docids";
 const DOCUMENTS_DB_NAME: &str = "documents";
 const USERS_IDS_DOCUMENTS_IDS: &[u8] = b"users-ids-documents-ids";
 
@@ -198,16 +202,14 @@ pub fn run(opt: Opt) -> anyhow::Result<()> {
 }
 
 fn patch_to_new_external_ids(index: &Index, wtxn: &mut heed::RwTxn) -> anyhow::Result<()> {
-    use heed::types::ByteSlice;
-
-    if let Some(documents_ids) = index.main.get::<_, ByteSlice, ByteSlice>(wtxn, USERS_IDS_DOCUMENTS_IDS)? {
+    if let Some(documents_ids) = index.main.get(wtxn, &USERS_IDS_DOCUMENTS_IDS)? {
         let documents_ids = documents_ids.to_owned();
-        index.main.put::<_, ByteSlice, ByteSlice>(
+        index.main.put(
             wtxn,
-            crate::index::HARD_EXTERNAL_DOCUMENTS_IDS_KEY.as_bytes(),
-            &documents_ids,
+            &crate::index::HARD_EXTERNAL_DOCUMENTS_IDS_KEY.as_bytes(),
+            &&documents_ids[..],
         )?;
-        index.main.delete::<_, ByteSlice>(wtxn, USERS_IDS_DOCUMENTS_IDS)?;
+        index.main.delete(wtxn, &USERS_IDS_DOCUMENTS_IDS)?;
     }
 
     Ok(())
@@ -238,43 +240,59 @@ fn most_common_words(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyhow:
 
 /// Helper function that converts the facet value key to a unique type
 /// that can be used to log or display purposes.
-fn facet_values_iter<'txn, DC: 'txn, T>(
+fn facet_values_iter<'txn, DC: 'txn, FS, FF, FI, T>(
     rtxn: &'txn heed::RoTxn,
-    db: heed::Database<heed::types::ByteSlice, DC>,
+    index: &Index,
     field_id: u8,
     facet_type: crate::facet::FacetType,
-    string_fn: impl Fn(&str) -> T + 'txn,
-    float_fn: impl Fn(u8, f64, f64) -> T + 'txn,
-    integer_fn: impl Fn(u8, i64, i64) -> T + 'txn,
-) -> heed::Result<Box<dyn Iterator<Item=heed::Result<(T, DC::DItem)>> + 'txn>>
+    string_fn: FS,
+    float_fn: FF,
+    integer_fn: FI,
+) -> heed::Result<(&'static str, Box<dyn Iterator<Item=heed::Result<(T, DC::DItem)>> + 'txn>)>
 where
     DC: heed::BytesDecode<'txn>,
+    FS: Fn(u8, &str, &str) -> T + 'txn,
+    FF: Fn(u8, f64, f64) -> T + 'txn,
+    FI: Fn(u8, i64, i64) -> T + 'txn,
 {
     use crate::facet::FacetType;
     use crate::heed_codec::facet::{
-        FacetValueStringCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec,
+        FacetLevelValueStrCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec,
     };
 
-    let iter = db.prefix_iter(&rtxn, &[field_id])?;
     match facet_type {
         FacetType::String => {
-            let iter = iter.remap_key_type::<FacetValueStringCodec>()
-                .map(move |r| r.map(|((_, key), value)| (string_fn(key), value)));
-            Ok(Box::new(iter) as Box<dyn Iterator<Item=_>>)
+            let name = FACET_FIELD_ID_STR_DOCIDS_DB_NAME;
+            let iter = index.facet_field_id_str_docids
+                .remap_types::<ByteSlice, DC>()
+                .prefix_iter(&rtxn, &&[field_id][..])?
+                .remap_key_type::<FacetLevelValueStrCodec>()
+                .map(move |r| r.map(|((_, level, left, right), value)| {
+                    (string_fn(level, left, right), value)
+                }));
+            Ok((name, Box::new(iter) as Box<dyn Iterator<Item=_>>))
         },
         FacetType::Float => {
-            let iter = iter.remap_key_type::<FacetLevelValueF64Codec>()
+            let name = FACET_FIELD_ID_F64_DOCIDS_DB_NAME;
+            let iter = index.facet_field_id_f64_docids
+                .remap_types::<ByteSlice, DC>()
+                .prefix_iter(&rtxn, &&[field_id][..])?
+                .remap_key_type::<FacetLevelValueF64Codec>()
                 .map(move |r| r.map(|((_, level, left, right), value)| {
                     (float_fn(level, left, right), value)
                 }));
-            Ok(Box::new(iter))
+            Ok((name, Box::new(iter)))
         },
         FacetType::Integer => {
-            let iter = iter.remap_key_type::<FacetLevelValueI64Codec>()
+            let name = FACET_FIELD_ID_I64_DOCIDS_DB_NAME;
+            let iter = index.facet_field_id_i64_docids
+                .remap_types::<ByteSlice, DC>()
+                .prefix_iter(&rtxn, &&[field_id][..])?
+                .remap_key_type::<FacetLevelValueI64Codec>()
                 .map(move |r| r.map(|((_, level, left, right), value)| {
                     (integer_fn(level, left, right), value)
                 }));
-            Ok(Box::new(iter))
+            Ok((name, Box::new(iter)))
         },
     }
 }
@@ -283,14 +301,22 @@ fn facet_number_value_to_string<T: fmt::Debug>(level: u8, left: T, right: T) -> 
     if level == 0 {
         (level, format!("{:?}", left))
     } else {
-        (level, format!("{:?} to {:?}", left, right))
+        (level, format!("{:?} to {:?} (level {})", left, right, level))
+    }
+}
+
+fn facet_string_value_to_string(level: u8, left: &str, right: &str) -> (u8, String) {
+    if level == 0 {
+        (level, format!("{:?}", left))
+    } else {
+        (level, format!("{:?} to {:?} (level {})", left, right, level))
     }
 }
 
 fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyhow::Result<()> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
-    use heed::types::{Str, ByteSlice};
+    use heed::types::Str;
 
     let Index {
         env: _env,
@@ -298,47 +324,42 @@ fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyho
         word_docids,
         docid_word_positions,
         word_pair_proximity_docids,
-        facet_field_id_value_docids,
+        facet_field_id_str_docids: _,
+        facet_field_id_f64_docids: _,
+        facet_field_id_i64_docids: _,
         field_id_docid_facet_values: _,
         documents,
     } = index;
-
-    let main_name = "main";
-    let word_docids_name = "word_docids";
-    let docid_word_positions_name = "docid_word_positions";
-    let word_pair_proximity_docids_name = "word_pair_proximity_docids";
-    let facet_field_id_value_docids_name = "facet_field_id_value_docids";
-    let documents_name = "documents";
 
     let mut heap = BinaryHeap::with_capacity(limit + 1);
 
     if limit > 0 {
         let words_fst = index.words_fst(rtxn)?;
-        heap.push(Reverse((words_fst.as_fst().as_bytes().len(), format!("words-fst"), main_name)));
+        heap.push(Reverse((words_fst.as_fst().as_bytes().len(), format!("words-fst"), MAIN_DB_NAME)));
         if heap.len() > limit { heap.pop(); }
 
-        if let Some(documents_ids) = main.get::<_, Str, ByteSlice>(rtxn, "documents-ids")? {
-            heap.push(Reverse((documents_ids.len(), format!("documents-ids"), main_name)));
+        if let Some(documents_ids) = main.remap_key_type::<Str>().get(rtxn, &"documents-ids")? {
+            heap.push(Reverse((documents_ids.len(), format!("documents-ids"), MAIN_DB_NAME)));
             if heap.len() > limit { heap.pop(); }
         }
 
         for result in word_docids.remap_data_type::<ByteSlice>().iter(rtxn)? {
             let (word, value) = result?;
-            heap.push(Reverse((value.len(), word.to_string(), word_docids_name)));
+            heap.push(Reverse((value.len(), word.to_string(), WORD_DOCIDS_DB_NAME)));
             if heap.len() > limit { heap.pop(); }
         }
 
         for result in docid_word_positions.remap_data_type::<ByteSlice>().iter(rtxn)? {
             let ((docid, word), value) = result?;
             let key = format!("{} {}", docid, word);
-            heap.push(Reverse((value.len(), key, docid_word_positions_name)));
+            heap.push(Reverse((value.len(), key, DOCID_WORD_POSITIONS_DB_NAME)));
             if heap.len() > limit { heap.pop(); }
         }
 
         for result in word_pair_proximity_docids.remap_data_type::<ByteSlice>().iter(rtxn)? {
             let ((word1, word2, prox), value) = result?;
             let key = format!("{} {} {}", word1, word2, prox);
-            heap.push(Reverse((value.len(), key, word_pair_proximity_docids_name)));
+            heap.push(Reverse((value.len(), key, WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME)));
             if heap.len() > limit { heap.pop(); }
         }
 
@@ -346,37 +367,27 @@ fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyho
         let fields_ids_map = index.fields_ids_map(rtxn)?;
         for (field_id, field_type) in faceted_fields {
             let facet_name = fields_ids_map.name(field_id).unwrap();
-
-            let db = facet_field_id_value_docids.remap_data_type::<ByteSlice>();
-            let iter = facet_values_iter(
+            let (facet_db_name, iter) = facet_values_iter::<ByteSlice, _, _, _, _>(
                 rtxn,
-                db,
+                index,
                 field_id,
                 field_type,
-                |key| key.to_owned(),
-                |level, left, right| {
-                    let mut output = facet_number_value_to_string(level, left, right).1;
-                    let _ = write!(&mut output, " (level {})", level);
-                    output
-                },
-                |level, left, right| {
-                    let mut output = facet_number_value_to_string(level, left, right).1;
-                    let _ = write!(&mut output, " (level {})", level);
-                    output
-                },
+                facet_string_value_to_string,
+                facet_number_value_to_string,
+                facet_number_value_to_string,
             )?;
 
             for result in iter {
-                let (fvalue, value) = result?;
+                let ((_level, fvalue), value) = result?;
                 let key = format!("{} {}", facet_name, fvalue);
-                heap.push(Reverse((value.len(), key, facet_field_id_value_docids_name)));
+                heap.push(Reverse((value.len(), key, facet_db_name)));
                 if heap.len() > limit { heap.pop(); }
             }
         }
 
         for result in documents.remap_data_type::<ByteSlice>().iter(rtxn)? {
             let (id, value) = result?;
-            heap.push(Reverse((value.len(), id.to_string(), documents_name)));
+            heap.push(Reverse((value.len(), id.to_string(), DOCUMENTS_DB_NAME)));
             if heap.len() > limit { heap.pop(); }
         }
     }
@@ -398,7 +409,7 @@ fn words_docids(index: &Index, rtxn: &heed::RoTxn, debug: bool, words: Vec<Strin
     wtr.write_record(&["word", "documents_ids"])?;
 
     for word in words {
-        if let Some(docids) = index.word_docids.get(rtxn, &word)? {
+        if let Some(docids) = index.word_docids.get(rtxn, &word.as_str())? {
             let docids = if debug {
                 format!("{:?}", docids)
             } else {
@@ -424,13 +435,12 @@ fn facet_values_docids(index: &Index, rtxn: &heed::RoTxn, debug: bool, field_nam
     let mut wtr = csv::Writer::from_writer(stdout.lock());
     wtr.write_record(&["facet_value", "facet_level", "documents_count", "documents_ids"])?;
 
-    let db = index.facet_field_id_value_docids;
-    let iter = facet_values_iter(
+    let (_dbname, iter) = facet_values_iter::<CboRoaringBitmapCodec, _, _, _, _>(
         rtxn,
-        db,
+        index,
         field_id,
         *field_type,
-        |key| (0, key.to_owned()),
+        facet_string_value_to_string,
         facet_number_value_to_string,
         facet_number_value_to_string,
     )?;
@@ -458,13 +468,12 @@ fn facet_stats(index: &Index, rtxn: &heed::RoTxn, field_name: String) -> anyhow:
     let field_type = faceted_fields.get(&field_id)
         .with_context(|| format!("field {} is not faceted", field_name))?;
 
-    let db = index.facet_field_id_value_docids;
-    let iter = facet_values_iter(
+    let (_dbname, iter) = facet_values_iter::<CboRoaringBitmapCodec, _, _, _, _>(
         rtxn,
-        db,
+        index,
         field_id,
         *field_type,
-        |_key| 0u8,
+        |level, _left, _right| level,
         |level, _left, _right| level,
         |level, _left, _right| level,
     )?;
@@ -525,13 +534,11 @@ fn export_documents(index: &Index, rtxn: &heed::RoTxn) -> anyhow::Result<()> {
 }
 
 fn total_docid_word_positions_size(index: &Index, rtxn: &heed::RoTxn) -> anyhow::Result<()> {
-    use heed::types::ByteSlice;
-
     let mut total_key_size = 0;
     let mut total_val_size = 0;
     let mut count = 0;
 
-    let iter = index.docid_word_positions.as_polymorph().iter::<_, ByteSlice, ByteSlice>(rtxn)?;
+    let iter = index.docid_word_positions.remap_types::<ByteSlice, ByteSlice>().iter(rtxn)?;
     for result in iter {
         let (key, val) = result?;
         total_key_size += key.len();
@@ -554,7 +561,7 @@ fn average_number_of_words_by_doc(index: &Index, rtxn: &heed::RoTxn) -> anyhow::
     let mut count = 0;
     let mut prev = None as Option<(DocumentId, u32)>;
 
-    let iter = index.docid_word_positions.as_polymorph().iter::<_, BEU32StrCodec, DecodeIgnore>(rtxn)?;
+    let iter = index.docid_word_positions.remap_types::<BEU32StrCodec, DecodeIgnore>().iter(rtxn)?;
     for result in iter {
         let ((docid, _word), ()) = result?;
 
@@ -592,8 +599,8 @@ fn average_number_of_positions_by_word(index: &Index, rtxn: &heed::RoTxn) -> any
     let mut values_length = Vec::new();
     let mut count = 0;
 
-    let db = index.docid_word_positions.as_polymorph();
-    for result in db.iter::<_, DecodeIgnore, BoRoaringBitmapCodec>(rtxn)? {
+    let db = index.docid_word_positions.remap_types::<DecodeIgnore, BoRoaringBitmapCodec>();
+    for result in db.iter(rtxn)? {
         let ((), val) = result?;
         values_length.push(val.len() as u32);
         count += 1;
@@ -608,20 +615,18 @@ fn average_number_of_positions_by_word(index: &Index, rtxn: &heed::RoTxn) -> any
 }
 
 fn size_of_database(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Result<()> {
-    use heed::types::ByteSlice;
-
     let database = match name {
-        MAIN_DB_NAME => &index.main,
-        WORD_DOCIDS_DB_NAME => index.word_docids.as_polymorph(),
-        DOCID_WORD_POSITIONS_DB_NAME => index.docid_word_positions.as_polymorph(),
-        WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME => index.word_pair_proximity_docids.as_polymorph(),
-        DOCUMENTS_DB_NAME => index.documents.as_polymorph(),
+        MAIN_DB_NAME => index.main,
+        WORD_DOCIDS_DB_NAME => index.word_docids.remap_types::<ByteSlice, ByteSlice>(),
+        DOCID_WORD_POSITIONS_DB_NAME => index.docid_word_positions.remap_types::<ByteSlice, ByteSlice>(),
+        WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME => index.word_pair_proximity_docids.remap_types::<ByteSlice, ByteSlice>(),
+        DOCUMENTS_DB_NAME => index.documents.remap_types::<ByteSlice, ByteSlice>(),
         unknown => anyhow::bail!("unknown database {:?}", unknown),
     };
 
     let mut key_size: u64 = 0;
     let mut val_size: u64 = 0;
-    for result in database.iter::<_, ByteSlice, ByteSlice>(rtxn)? {
+    for result in database.iter(rtxn)? {
         let (k, v) = result?;
         key_size += k.len() as u64;
         val_size += v.len() as u64;
@@ -636,13 +641,12 @@ fn size_of_database(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Re
 }
 
 fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Result<()> {
-    use heed::types::ByteSlice;
     use heed::{Error, BytesDecode};
     use roaring::RoaringBitmap;
-    use crate::{BoRoaringBitmapCodec, CboRoaringBitmapCodec, RoaringBitmapCodec};
+    use crate::{BoRoaringBitmapCodec, RoaringBitmapCodec};
 
     fn compute_stats<'a, DC: BytesDecode<'a, DItem = RoaringBitmap>>(
-        db: heed::PolyDatabase,
+        db: heed::UntypedDatabase,
         rtxn: &'a heed::RoTxn,
         name: &str,
     ) -> anyhow::Result<()>
@@ -651,7 +655,7 @@ fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Resu
         let mut val_size = 0u64;
         let mut values_length = Vec::new();
 
-        for result in db.iter::<_, ByteSlice, ByteSlice>(rtxn)? {
+        for result in db.iter(rtxn)? {
             let (key, val) = result?;
             key_size += key.len() as u64;
             val_size += val.len() as u64;
@@ -696,16 +700,16 @@ fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Resu
 
     match name {
         WORD_DOCIDS_DB_NAME => {
-            let db = index.word_docids.as_polymorph();
-            compute_stats::<RoaringBitmapCodec>(*db, rtxn, name)
+            let db = index.word_docids.remap_types::<ByteSlice, ByteSlice>();
+            compute_stats::<RoaringBitmapCodec>(db, rtxn, name)
         },
         DOCID_WORD_POSITIONS_DB_NAME => {
-            let db = index.docid_word_positions.as_polymorph();
-            compute_stats::<BoRoaringBitmapCodec>(*db, rtxn, name)
+            let db = index.docid_word_positions.remap_types::<ByteSlice, ByteSlice>();
+            compute_stats::<BoRoaringBitmapCodec>(db, rtxn, name)
         },
         WORD_PAIR_PROXIMITY_DOCIDS_DB_NAME => {
-            let db = index.word_pair_proximity_docids.as_polymorph();
-            compute_stats::<CboRoaringBitmapCodec>(*db, rtxn, name)
+            let db = index.word_pair_proximity_docids.remap_types::<ByteSlice, ByteSlice>();
+            compute_stats::<CboRoaringBitmapCodec>(db, rtxn, name)
         },
         unknown => anyhow::bail!("unknown database {:?}", unknown),
     }
@@ -719,7 +723,6 @@ fn word_pair_proximities_docids(
     word2: String,
 ) -> anyhow::Result<()>
 {
-    use heed::types::ByteSlice;
     use crate::RoaringBitmapCodec;
 
     let stdout = io::stdout();
@@ -732,8 +735,8 @@ fn word_pair_proximities_docids(
     prefix.push(0);
     prefix.extend_from_slice(word2.as_bytes());
 
-    let db = index.word_pair_proximity_docids.as_polymorph();
-    let iter = db.prefix_iter::<_, ByteSlice, RoaringBitmapCodec>(rtxn, &prefix)?;
+    let db = index.word_pair_proximity_docids.remap_types::<ByteSlice, RoaringBitmapCodec>();
+    let iter = db.prefix_iter(rtxn, &&prefix[..])?;
     for result in iter {
         let (key, docids) = result?;
 

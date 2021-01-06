@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+
 use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
 use roaring::RoaringBitmap;
 
@@ -16,7 +17,7 @@ impl heed::BytesDecode<'_> for BoRoaringBitmapCodec {
     }
 }
 
-impl heed::BytesEncode<'_> for BoRoaringBitmapCodec {
+impl heed::BytesEncode for BoRoaringBitmapCodec {
     type EItem = RoaringBitmap;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {

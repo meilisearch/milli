@@ -92,7 +92,7 @@ pub fn merge_readers(sources: Vec<Reader<FileFuse>>, merge: MergeFn) -> Merger<F
 
 pub fn merge_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
-    database: heed::PolyDatabase,
+    database: heed::UntypedDatabase,
     sources: Vec<Reader<FileFuse>>,
     merge: MergeFn,
     method: WriteMethod,
@@ -105,25 +105,25 @@ pub fn merge_into_lmdb_database(
 
     match method {
         WriteMethod::Append => {
-            let mut out_iter = database.iter_mut::<_, ByteSlice, ByteSlice>(wtxn)?;
+            let mut out_iter = database.iter_mut(wtxn)?;
             while let Some((k, v)) = in_iter.next()? {
-                out_iter.append(k, v).with_context(|| {
+                out_iter.append(&k, &v).with_context(|| {
                     format!("writing {:?} into LMDB", k.as_bstr())
                 })?;
             }
         },
         WriteMethod::GetMergePut => {
             while let Some((k, v)) = in_iter.next()? {
-                let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
+                let mut iter = database.prefix_iter_mut(wtxn, &k)?;
                 match iter.next().transpose()? {
                     Some((key, old_val)) if key == k => {
                         let vals = vec![Cow::Borrowed(old_val), Cow::Borrowed(v)];
                         let val = merge(k, &vals).expect("merge failed");
-                        iter.put_current(k, &val)?;
+                        iter.put_current(&k, &&val[..])?;
                     },
                     _ => {
                         drop(iter);
-                        database.put::<_, ByteSlice, ByteSlice>(wtxn, k, v)?;
+                        database.put(wtxn, &k, &v)?;
                     },
                 }
             }
@@ -136,7 +136,7 @@ pub fn merge_into_lmdb_database(
 
 pub fn write_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
-    database: heed::PolyDatabase,
+    database: heed::UntypedDatabase,
     mut reader: Reader<FileFuse>,
     merge: MergeFn,
     method: WriteMethod,
@@ -146,25 +146,25 @@ pub fn write_into_lmdb_database(
 
     match method {
         WriteMethod::Append => {
-            let mut out_iter = database.iter_mut::<_, ByteSlice, ByteSlice>(wtxn)?;
+            let mut out_iter = database.iter_mut(wtxn)?;
             while let Some((k, v)) = reader.next()? {
-                out_iter.append(k, v).with_context(|| {
+                out_iter.append(&k, &v).with_context(|| {
                     format!("writing {:?} into LMDB", k.as_bstr())
                 })?;
             }
         },
         WriteMethod::GetMergePut => {
             while let Some((k, v)) = reader.next()? {
-                let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
+                let mut iter = database.prefix_iter_mut(wtxn, &k)?;
                 match iter.next().transpose()? {
                     Some((key, old_val)) if key == k => {
                         let vals = vec![Cow::Borrowed(old_val), Cow::Borrowed(v)];
                         let val = merge(k, &vals)?;
-                        iter.put_current(k, &val)?;
+                        iter.put_current(&k, &&val[..])?;
                     },
                     _ => {
                         drop(iter);
-                        database.put::<_, ByteSlice, ByteSlice>(wtxn, k, v)?;
+                        database.put(wtxn, &k, &v)?;
                     },
                 }
             }
@@ -335,7 +335,9 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         enum DatabaseType {
             Main,
             WordDocids,
-            FacetLevel0ValuesDocids,
+            FacetLevel0StrDocids,
+            FacetLevel0F64Docids,
+            FacetLevel0I64Docids,
         }
 
         let faceted_fields = self.index.faceted_fields(self.wtxn)?;
@@ -397,7 +399,9 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
             let mut word_docids_readers = Vec::with_capacity(readers.len());
             let mut docid_word_positions_readers = Vec::with_capacity(readers.len());
             let mut words_pairs_proximities_docids_readers = Vec::with_capacity(readers.len());
-            let mut facet_field_value_docids_readers = Vec::with_capacity(readers.len());
+            let mut facet_field_str_docids_readers = Vec::with_capacity(readers.len());
+            let mut facet_field_f64_docids_readers = Vec::with_capacity(readers.len());
+            let mut facet_field_i64_docids_readers = Vec::with_capacity(readers.len());
             let mut field_id_docid_facet_values_readers = Vec::with_capacity(readers.len());
             let mut documents_readers = Vec::with_capacity(readers.len());
             readers.into_iter().for_each(|readers| {
@@ -406,7 +410,9 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
                     word_docids,
                     docid_word_positions,
                     words_pairs_proximities_docids,
-                    facet_field_value_docids,
+                    facet_field_str_docids,
+                    facet_field_f64_docids,
+                    facet_field_i64_docids,
                     field_id_docid_facet_values,
                     documents
                 } = readers;
@@ -414,7 +420,9 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
                 word_docids_readers.push(word_docids);
                 docid_word_positions_readers.push(docid_word_positions);
                 words_pairs_proximities_docids_readers.push(words_pairs_proximities_docids);
-                facet_field_value_docids_readers.push(facet_field_value_docids);
+                facet_field_str_docids_readers.push(facet_field_str_docids);
+                facet_field_f64_docids_readers.push(facet_field_f64_docids);
+                facet_field_i64_docids_readers.push(facet_field_i64_docids);
                 field_id_docid_facet_values_readers.push(field_id_docid_facet_values);
                 documents_readers.push(documents);
             });
@@ -440,8 +448,18 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
                     (DatabaseType::Main, main_readers, main_merge as MergeFn),
                     (DatabaseType::WordDocids, word_docids_readers, word_docids_merge),
                     (
-                        DatabaseType::FacetLevel0ValuesDocids,
-                        facet_field_value_docids_readers,
+                        DatabaseType::FacetLevel0StrDocids,
+                        facet_field_str_docids_readers,
+                        facet_field_value_docids_merge,
+                    ),
+                    (
+                        DatabaseType::FacetLevel0F64Docids,
+                        facet_field_f64_docids_readers,
+                        facet_field_value_docids_merge,
+                    ),
+                    (
+                        DatabaseType::FacetLevel0I64Docids,
+                        facet_field_i64_docids_readers,
                         facet_field_value_docids_merge,
                     ),
                 ]
@@ -506,7 +524,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         debug!("Writing the docid word positions into LMDB on disk...");
         merge_into_lmdb_database(
             self.wtxn,
-            *self.index.docid_word_positions.as_polymorph(),
+            self.index.docid_word_positions.remap_types::<ByteSlice, ByteSlice>(),
             docid_word_positions_readers,
             docid_word_positions_merge,
             write_method
@@ -521,7 +539,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         debug!("Writing the documents into LMDB on disk...");
         merge_into_lmdb_database(
             self.wtxn,
-            *self.index.documents.as_polymorph(),
+            self.index.documents.remap_types::<ByteSlice, ByteSlice>(),
             documents_readers,
             documents_merge,
             write_method
@@ -536,7 +554,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         debug!("Writing the field id docid facet values into LMDB on disk...");
         merge_into_lmdb_database(
             self.wtxn,
-            *self.index.field_id_docid_facet_values.as_polymorph(),
+            self.index.field_id_docid_facet_values.remap_types::<ByteSlice, ByteSlice>(),
             field_id_docid_facet_values_readers,
             field_id_docid_facet_values_merge,
             write_method,
@@ -551,7 +569,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         debug!("Writing the words pairs proximities docids into LMDB on disk...");
         merge_into_lmdb_database(
             self.wtxn,
-            *self.index.word_pair_proximity_docids.as_polymorph(),
+            self.index.word_pair_proximity_docids.remap_types::<ByteSlice, ByteSlice>(),
             words_pairs_proximities_docids_readers,
             words_pairs_proximities_docids_merge,
             write_method,
@@ -578,7 +596,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
                 },
                 DatabaseType::WordDocids => {
                     debug!("Writing the words docids into LMDB on disk...");
-                    let db = *self.index.word_docids.as_polymorph();
+                    let db = self.index.word_docids.remap_types::<ByteSlice, ByteSlice>();
                     write_into_lmdb_database(
                         self.wtxn,
                         db,
@@ -587,9 +605,31 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
                         write_method,
                     )?;
                 },
-                DatabaseType::FacetLevel0ValuesDocids => {
-                    debug!("Writing the facet values docids into LMDB on disk...");
-                    let db = *self.index.facet_field_id_value_docids.as_polymorph();
+                DatabaseType::FacetLevel0StrDocids => {
+                    debug!("Writing the facet strings docids into LMDB on disk...");
+                    let db = self.index.facet_field_id_str_docids.remap_types::<ByteSlice, ByteSlice>();
+                    write_into_lmdb_database(
+                        self.wtxn,
+                        db,
+                        content,
+                        facet_field_value_docids_merge,
+                        write_method,
+                    )?;
+                },
+                DatabaseType::FacetLevel0F64Docids => {
+                    debug!("Writing the facet floats docids into LMDB on disk...");
+                    let db = self.index.facet_field_id_f64_docids.remap_types::<ByteSlice, ByteSlice>();
+                    write_into_lmdb_database(
+                        self.wtxn,
+                        db,
+                        content,
+                        facet_field_value_docids_merge,
+                        write_method,
+                    )?;
+                },
+                DatabaseType::FacetLevel0I64Docids => {
+                    debug!("Writing the facet integers docids into LMDB on disk...");
+                    let db = self.index.facet_field_id_i64_docids.remap_types::<ByteSlice, ByteSlice>();
                     write_into_lmdb_database(
                         self.wtxn,
                         db,

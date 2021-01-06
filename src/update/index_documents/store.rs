@@ -20,9 +20,9 @@ use serde_json::Value;
 use tempfile::tempfile;
 
 use crate::facet::FacetType;
-use crate::heed_codec::facet::{FacetValueStringCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec};
-use crate::heed_codec::facet::{FieldDocIdFacetStringCodec, FieldDocIdFacetF64Codec, FieldDocIdFacetI64Codec};
 use crate::heed_codec::{BoRoaringBitmapCodec, CboRoaringBitmapCodec};
+use crate::heed_codec::facet::{FacetLevelValueStrCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec};
+use crate::heed_codec::facet::{FieldDocIdFacetStringCodec, FieldDocIdFacetF64Codec, FieldDocIdFacetI64Codec};
 use crate::update::UpdateIndexingStep;
 use crate::{json_to_string, SmallVec8, SmallVec32, SmallString32, Position, DocumentId, FieldId};
 
@@ -43,7 +43,9 @@ pub struct Readers {
     pub word_docids: Reader<FileFuse>,
     pub docid_word_positions: Reader<FileFuse>,
     pub words_pairs_proximities_docids: Reader<FileFuse>,
-    pub facet_field_value_docids: Reader<FileFuse>,
+    pub facet_field_str_docids: Reader<FileFuse>,
+    pub facet_field_f64_docids: Reader<FileFuse>,
+    pub facet_field_i64_docids: Reader<FileFuse>,
     pub field_id_docid_facet_values: Reader<FileFuse>,
     pub documents: Reader<FileFuse>,
 }
@@ -57,8 +59,6 @@ pub struct Store<'s, A> {
     word_docids_limit: usize,
     words_pairs_proximities_docids: LinkedHashMap<(SmallVec32<u8>, SmallVec32<u8>, u8), RoaringBitmap>,
     words_pairs_proximities_docids_limit: usize,
-    facet_field_value_docids: LinkedHashMap<(u8, FacetValue), RoaringBitmap>,
-    facet_field_value_docids_limit: usize,
     // MTBL parameters
     chunk_compression_type: CompressionType,
     chunk_compression_level: Option<u32>,
@@ -67,7 +67,9 @@ pub struct Store<'s, A> {
     main_sorter: Sorter<MergeFn>,
     word_docids_sorter: Sorter<MergeFn>,
     words_pairs_proximities_docids_sorter: Sorter<MergeFn>,
-    facet_field_value_docids_sorter: Sorter<MergeFn>,
+    facet_field_str_docids_sorter: Sorter<MergeFn>,
+    facet_field_f64_docids_sorter: Sorter<MergeFn>,
+    facet_field_i64_docids_sorter: Sorter<MergeFn>,
     field_id_docid_facet_values_sorter: Sorter<MergeFn>,
     // MTBL writers
     docid_word_positions_writer: Writer<File>,
@@ -90,7 +92,7 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
     ) -> anyhow::Result<Self>
     {
         // We divide the max memory by the number of sorter the Store have.
-        let max_memory = max_memory.map(|mm| cmp::max(ONE_KILOBYTE, mm / 4));
+        let max_memory = max_memory.map(|mm| cmp::max(ONE_KILOBYTE, mm / 6));
         let linked_hash_map_size = linked_hash_map_size.unwrap_or(500);
 
         let main_sorter = create_sorter(
@@ -117,7 +119,23 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             max_nb_chunks,
             max_memory,
         );
-        let facet_field_value_docids_sorter = create_sorter(
+        let facet_field_str_docids_sorter = create_sorter(
+            facet_field_value_docids_merge,
+            chunk_compression_type,
+            chunk_compression_level,
+            chunk_fusing_shrink_size,
+            max_nb_chunks,
+            max_memory,
+        );
+        let facet_field_f64_docids_sorter = create_sorter(
+            facet_field_value_docids_merge,
+            chunk_compression_type,
+            chunk_compression_level,
+            chunk_fusing_shrink_size,
+            max_nb_chunks,
+            max_memory,
+        );
+        let facet_field_i64_docids_sorter = create_sorter(
             facet_field_value_docids_merge,
             chunk_compression_type,
             chunk_compression_level,
@@ -152,8 +170,6 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             word_docids_limit: linked_hash_map_size,
             words_pairs_proximities_docids: LinkedHashMap::with_capacity(linked_hash_map_size),
             words_pairs_proximities_docids_limit: linked_hash_map_size,
-            facet_field_value_docids: LinkedHashMap::with_capacity(linked_hash_map_size),
-            facet_field_value_docids_limit: linked_hash_map_size,
             // MTBL parameters
             chunk_compression_type,
             chunk_compression_level,
@@ -162,7 +178,9 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             main_sorter,
             word_docids_sorter,
             words_pairs_proximities_docids_sorter,
-            facet_field_value_docids_sorter,
+            facet_field_str_docids_sorter,
+            facet_field_f64_docids_sorter,
+            facet_field_i64_docids_sorter,
             field_id_docid_facet_values_sorter,
             // MTBL writers
             docid_word_positions_writer,
@@ -187,37 +205,6 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
                     // Removing the front element is equivalent to removing the LRU element.
                     let lru = self.word_docids.pop_front();
                     Self::write_word_docids(&mut self.word_docids_sorter, lru)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    // Save the documents ids under the facet field id and value we have seen it.
-    fn insert_facet_values_docid(
-        &mut self,
-        field_id: FieldId,
-        field_value: FacetValue,
-        id: DocumentId,
-    ) -> anyhow::Result<()>
-    {
-        Self::write_field_id_docid_facet_value(&mut self.field_id_docid_facet_values_sorter, field_id, id, &field_value)?;
-
-        let key = (field_id, field_value);
-        // if get_refresh finds the element it is assured to be at the end of the linked hash map.
-        match self.facet_field_value_docids.get_refresh(&key) {
-            Some(old) => { old.insert(id); },
-            None => {
-                // A newly inserted element is append at the end of the linked hash map.
-                self.facet_field_value_docids.insert(key, RoaringBitmap::from_iter(Some(id)));
-                // If the word docids just reached it's capacity we must make sure to remove
-                // one element, this way next time we insert we doesn't grow the capacity.
-                if self.facet_field_value_docids.len() == self.facet_field_value_docids_limit {
-                    // Removing the front element is equivalent to removing the LRU element.
-                    Self::write_facet_field_value_docids(
-                        &mut self.facet_field_value_docids_sorter,
-                        self.facet_field_value_docids.pop_front(),
-                    )?;
                 }
             }
         }
@@ -281,12 +268,33 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
         self.documents_writer.insert(document_id.to_be_bytes(), record)?;
         Self::write_docid_word_positions(&mut self.docid_word_positions_writer, document_id, words_positions)?;
 
-        // We store document_id associated with all the field id and values.
-        for (field, values) in facet_values.drain() {
+        // We write the facet value under the document id.
+        for (fid, values) in facet_values.iter() {
             for value in values {
-                self.insert_facet_values_docid(field, value, document_id)?;
+                Self::write_field_id_docid_facet_value(
+                    &mut self.field_id_docid_facet_values_sorter,
+                    *fid,
+                    document_id,
+                    value,
+                )?;
             }
         }
+
+        // Then we also write those facets in the global facet databases.
+        let iter = facet_values
+            .drain()
+            .flat_map(|(fid, values)| {
+                values.into_iter().map(move |val| {
+                    ((fid, val), RoaringBitmap::from_iter(Some(document_id)))
+                })
+            });
+
+        Self::write_facet_field_value_docids(
+            &mut self.facet_field_str_docids_sorter,
+            &mut self.facet_field_f64_docids_sorter,
+            &mut self.facet_field_i64_docids_sorter,
+            iter,
+        )?;
 
         Ok(())
     }
@@ -349,7 +357,9 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
     }
 
     fn write_facet_field_value_docids<I>(
-        sorter: &mut Sorter<MergeFn>,
+        str_sorter: &mut Sorter<MergeFn>,
+        f64_sorter: &mut Sorter<MergeFn>,
+        i64_sorter: &mut Sorter<MergeFn>,
         iter: I,
     ) -> anyhow::Result<()>
     where I: IntoIterator<Item=((FieldId, FacetValue), RoaringBitmap)>
@@ -358,7 +368,7 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
 
         for ((field_id, value), docids) in iter {
             let result = match value {
-                String(s) => FacetValueStringCodec::bytes_encode(&(field_id, &s)).map(Cow::into_owned),
+                String(ref s) => FacetLevelValueStrCodec::bytes_encode(&(field_id, 0, &s, &s)).map(Cow::into_owned),
                 Float(f) => FacetLevelValueF64Codec::bytes_encode(&(field_id, 0, *f, *f)).map(Cow::into_owned),
                 Integer(i) => FacetLevelValueI64Codec::bytes_encode(&(field_id, 0, i, i)).map(Cow::into_owned),
             };
@@ -366,7 +376,11 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             let bytes = CboRoaringBitmapCodec::bytes_encode(&docids)
                 .context("could not serialize docids")?;
             if lmdb_key_valid_size(&key) {
-                sorter.insert(&key, &bytes)?;
+                match value {
+                    String(_) => str_sorter.insert(&key, &bytes)?,
+                    Float(_) => f64_sorter.insert(&key, &bytes)?,
+                    Integer(_) => i64_sorter.insert(&key, &bytes)?,
+                }
             }
         }
 
@@ -512,10 +526,6 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             &mut self.words_pairs_proximities_docids_sorter,
             self.words_pairs_proximities_docids,
         )?;
-        Self::write_facet_field_value_docids(
-            &mut self.facet_field_value_docids_sorter,
-            self.facet_field_value_docids,
-        )?;
 
         let mut word_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
         let mut builder = fst::SetBuilder::memory();
@@ -537,8 +547,14 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
         let mut words_pairs_proximities_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
         self.words_pairs_proximities_docids_sorter.write_into(&mut words_pairs_proximities_docids_wtr)?;
 
-        let mut facet_field_value_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
-        self.facet_field_value_docids_sorter.write_into(&mut facet_field_value_docids_wtr)?;
+        let mut facet_field_str_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
+        self.facet_field_str_docids_sorter.write_into(&mut facet_field_str_docids_wtr)?;
+
+        let mut facet_field_f64_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
+        self.facet_field_f64_docids_sorter.write_into(&mut facet_field_f64_docids_wtr)?;
+
+        let mut facet_field_i64_docids_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
+        self.facet_field_i64_docids_sorter.write_into(&mut facet_field_i64_docids_wtr)?;
 
         let mut field_id_docid_facet_values_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
         self.field_id_docid_facet_values_sorter.write_into(&mut field_id_docid_facet_values_wtr)?;
@@ -546,7 +562,9 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
         let main = writer_into_reader(main_wtr, shrink_size)?;
         let word_docids = writer_into_reader(word_docids_wtr, shrink_size)?;
         let words_pairs_proximities_docids = writer_into_reader(words_pairs_proximities_docids_wtr, shrink_size)?;
-        let facet_field_value_docids = writer_into_reader(facet_field_value_docids_wtr, shrink_size)?;
+        let facet_field_str_docids = writer_into_reader(facet_field_str_docids_wtr, shrink_size)?;
+        let facet_field_f64_docids = writer_into_reader(facet_field_f64_docids_wtr, shrink_size)?;
+        let facet_field_i64_docids = writer_into_reader(facet_field_i64_docids_wtr, shrink_size)?;
         let field_id_docid_facet_values = writer_into_reader(field_id_docid_facet_values_wtr, shrink_size)?;
         let docid_word_positions = writer_into_reader(self.docid_word_positions_writer, shrink_size)?;
         let documents = writer_into_reader(self.documents_writer, shrink_size)?;
@@ -556,7 +574,9 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             word_docids,
             docid_word_positions,
             words_pairs_proximities_docids,
-            facet_field_value_docids,
+            facet_field_str_docids,
+            facet_field_f64_docids,
+            facet_field_i64_docids,
             field_id_docid_facet_values,
             documents,
         })

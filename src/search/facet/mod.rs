@@ -6,11 +6,11 @@ use heed::types::{DecodeIgnore, ByteSlice};
 use heed::{BytesEncode, BytesDecode};
 use heed::{Database, RoRange, RoRevRange, LazyDecode};
 use log::debug;
-use num_traits::Bounded;
 use roaring::RoaringBitmap;
 
+use crate::facet::FacetBounded;
+use crate::FieldId;
 use crate::heed_codec::CboRoaringBitmapCodec;
-use crate::{Index, FieldId};
 
 pub use self::facet_condition::{FacetCondition, FacetNumberOperator, FacetStringOperator};
 pub use self::facet_distribution::FacetDistribution;
@@ -26,8 +26,8 @@ pub struct FacetRange<'t, T: 't, KC> {
 
 impl<'t, T: 't, KC> FacetRange<'t, T, KC>
 where
-    KC: for<'a> BytesEncode<'a, EItem = (FieldId, u8, T, T)>,
-    T: PartialOrd + Copy + Bounded,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
+    T: PartialOrd + Copy + FacetBounded,
 {
     pub fn new(
         rtxn: &'t heed::RoTxn,
@@ -44,14 +44,14 @@ where
             Unbounded => Included((field_id, level, T::min_value(), T::min_value())),
         };
         let right_bound = Included((field_id, level, T::max_value(), T::max_value()));
-        let iter = db.lazily_decode_data().range(rtxn, &(left_bound, right_bound))?;
+        let iter = db.lazily_decode_data().range(rtxn, (left_bound, right_bound))?;
         Ok(FacetRange { iter, end: right })
     }
 }
 
-impl<'t, T, KC> Iterator for FacetRange<'t, T, KC>
+impl<'t, T: 't, KC> Iterator for FacetRange<'t, T, KC>
 where
-    KC: for<'a> BytesEncode<'a, EItem = (FieldId, u8, T, T)>,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
     KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
     T: PartialOrd + Copy,
 {
@@ -87,8 +87,8 @@ pub struct FacetRevRange<'t, T: 't, KC> {
 
 impl<'t, T: 't, KC> FacetRevRange<'t, T, KC>
 where
-    KC: for<'a> BytesEncode<'a, EItem = (FieldId, u8, T, T)>,
-    T: PartialOrd + Copy + Bounded,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
+    T: PartialOrd + Copy + FacetBounded,
 {
     pub fn new(
         rtxn: &'t heed::RoTxn,
@@ -105,14 +105,14 @@ where
             Unbounded => Included((field_id, level, T::min_value(), T::min_value())),
         };
         let right_bound = Included((field_id, level, T::max_value(), T::max_value()));
-        let iter = db.lazily_decode_data().rev_range(rtxn, &(left_bound, right_bound))?;
+        let iter = db.lazily_decode_data().rev_range(rtxn, (left_bound, right_bound))?;
         Ok(FacetRevRange { iter, end: right })
     }
 }
 
-impl<'t, T, KC> Iterator for FacetRevRange<'t, T, KC>
+impl<'t, T: 't, KC> Iterator for FacetRevRange<'t, T, KC>
 where
-    KC: for<'a> BytesEncode<'a, EItem = (FieldId, u8, T, T)>,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
     KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
     T: PartialOrd + Copy,
 {
@@ -150,23 +150,22 @@ pub struct FacetIter<'t, T: 't, KC> {
     must_reduce: bool,
 }
 
-impl<'t, T, KC> FacetIter<'t, T, KC>
+impl<'t, T: 't, KC> FacetIter<'t, T, KC>
 where
-    KC: heed::BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
-    KC: for<'a> BytesEncode<'a, EItem = (FieldId, u8, T, T)>,
-    T: PartialOrd + Copy + Bounded,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
+    KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
+    T: PartialOrd + Copy + FacetBounded,
 {
     /// Create a `FacetIter` that will iterate on the different facet entries
     /// (facet value + documents ids) and that will reduce the given documents ids
     /// while iterating on the different facet levels.
     pub fn new_reducing(
         rtxn: &'t heed::RoTxn,
-        index: &'t Index,
+        db: heed::Database<KC, CboRoaringBitmapCodec>,
         field_id: FieldId,
         documents_ids: RoaringBitmap,
     ) -> heed::Result<FacetIter<'t, T, KC>>
     {
-        let db = index.facet_field_id_value_docids.remap_key_type::<KC>();
         let highest_level = Self::highest_level(rtxn, db, field_id)?.unwrap_or(0);
         let highest_iter = FacetRange::new(rtxn, db, field_id, highest_level, Unbounded, Unbounded)?;
         let level_iters = vec![(documents_ids, Left(highest_iter))];
@@ -178,12 +177,11 @@ where
     /// while iterating on the different facet levels.
     pub fn new_reverse_reducing(
         rtxn: &'t heed::RoTxn,
-        index: &'t Index,
+        db: heed::Database<KC, CboRoaringBitmapCodec>,
         field_id: FieldId,
         documents_ids: RoaringBitmap,
     ) -> heed::Result<FacetIter<'t, T, KC>>
     {
-        let db = index.facet_field_id_value_docids.remap_key_type::<KC>();
         let highest_level = Self::highest_level(rtxn, db, field_id)?.unwrap_or(0);
         let highest_iter = FacetRevRange::new(rtxn, db, field_id, highest_level, Unbounded, Unbounded)?;
         let level_iters = vec![(documents_ids, Right(highest_iter))];
@@ -196,12 +194,11 @@ where
     /// a document id associated with multiple facet values.
     pub fn new_non_reducing(
         rtxn: &'t heed::RoTxn,
-        index: &'t Index,
+        db: heed::Database<KC, CboRoaringBitmapCodec>,
         field_id: FieldId,
         documents_ids: RoaringBitmap,
     ) -> heed::Result<FacetIter<'t, T, KC>>
     {
-        let db = index.facet_field_id_value_docids.remap_key_type::<KC>();
         let highest_level = Self::highest_level(rtxn, db, field_id)?.unwrap_or(0);
         let highest_iter = FacetRange::new(rtxn, db, field_id, highest_level, Unbounded, Unbounded)?;
         let level_iters = vec![(documents_ids, Left(highest_iter))];
@@ -210,7 +207,7 @@ where
 
     fn highest_level<X>(rtxn: &'t heed::RoTxn, db: Database<KC, X>, fid: FieldId) -> heed::Result<Option<u8>> {
         let level = db.remap_types::<ByteSlice, DecodeIgnore>()
-            .prefix_iter(rtxn, &[fid][..])?
+            .prefix_iter(rtxn, &&&[fid][..])?
             .remap_key_type::<KC>()
             .last().transpose()?
             .map(|((_, level, _, _), _)| level);
@@ -220,9 +217,9 @@ where
 
 impl<'t, T: 't, KC> Iterator for FacetIter<'t, T, KC>
 where
-    KC: heed::BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
-    KC: for<'x> heed::BytesEncode<'x, EItem = (FieldId, u8, T, T)>,
-    T: PartialOrd + Copy + Bounded + Debug,
+    KC: BytesEncode<EItem = (FieldId, u8, T, T)>,
+    KC: BytesDecode<'t, DItem = (FieldId, u8, T, T)>,
+    T: PartialOrd + Copy + FacetBounded + Debug,
 {
     type Item = heed::Result<(T, RoaringBitmap)>;
 

@@ -63,7 +63,7 @@ impl heed::BytesDecode<'_> for CboRoaringBitmapCodec {
     }
 }
 
-impl heed::BytesEncode<'_> for CboRoaringBitmapCodec {
+impl heed::BytesEncode for CboRoaringBitmapCodec {
     type EItem = RoaringBitmap;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn verify_encoding_decoding() {
         let input = RoaringBitmap::from_iter(0..THRESHOLD as u32);
-        let bytes = CboRoaringBitmapCodec::bytes_encode(&input).unwrap();
+        let bytes = CboRoaringBitmapCodec::bytes_encode(&&input).unwrap();
         let output = CboRoaringBitmapCodec::bytes_decode(&bytes).unwrap();
         assert_eq!(input, output);
     }

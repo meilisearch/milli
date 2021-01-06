@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 use std::convert::TryInto;
-use std::str;
+use std::{str, marker};
 
 use crate::{FieldId, DocumentId};
 
-pub struct FieldDocIdFacetStringCodec;
+pub struct FieldDocIdFacetStringCodec<'a>(marker::PhantomData<&'a ()>);
 
-impl<'a> heed::BytesDecode<'a> for FieldDocIdFacetStringCodec {
+impl<'a> heed::BytesDecode<'a> for FieldDocIdFacetStringCodec<'_> {
     type DItem = (FieldId, DocumentId, &'a str);
 
     fn bytes_decode(bytes: &'a [u8]) -> Option<Self::DItem> {
@@ -18,7 +18,7 @@ impl<'a> heed::BytesDecode<'a> for FieldDocIdFacetStringCodec {
     }
 }
 
-impl<'a> heed::BytesEncode<'a> for FieldDocIdFacetStringCodec {
+impl<'a> heed::BytesEncode for FieldDocIdFacetStringCodec<'a> {
     type EItem = (FieldId, DocumentId, &'a str);
 
     fn bytes_encode((field_id, document_id, value): &Self::EItem) -> Option<Cow<[u8]>> {

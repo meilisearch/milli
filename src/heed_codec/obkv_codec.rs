@@ -11,7 +11,7 @@ impl<'a> heed::BytesDecode<'a> for ObkvCodec {
     }
 }
 
-impl heed::BytesEncode<'_> for ObkvCodec {
+impl heed::BytesEncode for ObkvCodec {
     type EItem = KvWriter<Vec<u8>>;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {

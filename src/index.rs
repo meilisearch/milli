@@ -4,17 +4,16 @@ use std::path::Path;
 
 use anyhow::Context;
 use heed::types::*;
-use heed::{PolyDatabase, Database, RwTxn, RoTxn};
+use heed::{UntypedDatabase, Database, RwTxn, RoTxn};
 use roaring::RoaringBitmap;
 
 use crate::facet::FacetType;
 use crate::fields_ids_map::FieldsIdsMap;
-use crate::{default_criteria, Criterion, Search, FacetDistribution};
+use crate::heed_codec::facet::{FacetLevelValueStrCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec};
 use crate::{BEU32, DocumentId, FieldId, ExternalDocumentsIds};
-use crate::{
-    RoaringBitmapCodec, BEU32StrCodec, StrStrU8Codec, ObkvCodec,
-    BoRoaringBitmapCodec, CboRoaringBitmapCodec,
-};
+use crate::{BEU32StrCodec, StrStrU8Codec, ObkvCodec};
+use crate::{default_criteria, Criterion, Search, FacetDistribution};
+use crate::{RoaringBitmapCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec};
 
 pub const CRITERIA_KEY: &str = "criteria";
 pub const DISPLAYED_FIELDS_KEY: &str = "displayed-fields";
@@ -33,15 +32,17 @@ pub struct Index {
     /// The LMDB environment which this index is associated with.
     pub env: heed::Env,
     /// Contains many different types (e.g. the fields ids map).
-    pub main: PolyDatabase,
+    pub main: UntypedDatabase,
     /// A word and all the documents ids containing the word.
-    pub word_docids: Database<Str, RoaringBitmapCodec>,
+    pub word_docids: Database<Str<'static>, RoaringBitmapCodec>,
     /// Maps a word and a document id (u32) to all the positions where the given word appears.
-    pub docid_word_positions: Database<BEU32StrCodec, BoRoaringBitmapCodec>,
+    pub docid_word_positions: Database<BEU32StrCodec<'static>, BoRoaringBitmapCodec>,
     /// Maps the proximity between a pair of words with all the docids where this relation appears.
-    pub word_pair_proximity_docids: Database<StrStrU8Codec, CboRoaringBitmapCodec>,
+    pub word_pair_proximity_docids: Database<StrStrU8Codec<'static>, CboRoaringBitmapCodec>,
     /// Maps the facet field id and the globally ordered value with the docids that corresponds to it.
-    pub facet_field_id_value_docids: Database<ByteSlice, CboRoaringBitmapCodec>,
+    pub facet_field_id_str_docids: Database<FacetLevelValueStrCodec<'static>, CboRoaringBitmapCodec>,
+    pub facet_field_id_f64_docids: Database<FacetLevelValueF64Codec, CboRoaringBitmapCodec>,
+    pub facet_field_id_i64_docids: Database<FacetLevelValueI64Codec, CboRoaringBitmapCodec>,
     /// Maps the document id, the facet field id and the globally ordered value.
     pub field_id_docid_facet_values: Database<ByteSlice, Unit>,
     /// Maps the document id to the document as an obkv store.
@@ -49,15 +50,17 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> anyhow::Result<Index> {
-        options.max_dbs(7);
+    pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> anyhow::Result<Self> {
+        options.max_dbs(9);
 
         let env = options.open(path)?;
-        let main = env.create_poly_database(Some("main"))?;
+        let main = env.create_database(Some("main"))?;
         let word_docids = env.create_database(Some("word-docids"))?;
         let docid_word_positions = env.create_database(Some("docid-word-positions"))?;
         let word_pair_proximity_docids = env.create_database(Some("word-pair-proximity-docids"))?;
-        let facet_field_id_value_docids = env.create_database(Some("facet-field-id-value-docids"))?;
+        let facet_field_id_str_docids = env.create_database(Some("facet-field-id-str-docids"))?;
+        let facet_field_id_f64_docids = env.create_database(Some("facet-field-id-f64-docids"))?;
+        let facet_field_id_i64_docids = env.create_database(Some("facet-field-id-i64-docids"))?;
         let field_id_docid_facet_values = env.create_database(Some("field-id-docid-facet-values"))?;
         let documents = env.create_database(Some("documents"))?;
 
@@ -67,7 +70,9 @@ impl Index {
             word_docids,
             docid_word_positions,
             word_pair_proximity_docids,
-            facet_field_id_value_docids,
+            facet_field_id_str_docids,
+            facet_field_id_f64_docids,
+            facet_field_id_i64_docids,
             field_id_docid_facet_values,
             documents,
         })
@@ -101,29 +106,29 @@ impl Index {
 
     /// Writes the documents ids that corresponds to the user-ids-documents-ids FST.
     pub fn put_documents_ids(&self, wtxn: &mut RwTxn, docids: &RoaringBitmap) -> heed::Result<()> {
-        self.main.put::<_, Str, RoaringBitmapCodec>(wtxn, DOCUMENTS_IDS_KEY, docids)
+        self.main.remap_types::<Str, RoaringBitmapCodec>().put(wtxn, &DOCUMENTS_IDS_KEY, docids)
     }
 
     /// Returns the internal documents ids.
     pub fn documents_ids(&self, rtxn: &RoTxn) -> heed::Result<RoaringBitmap> {
-        Ok(self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?.unwrap_or_default())
+        Ok(self.main.remap_types::<Str, RoaringBitmapCodec>().get(rtxn, &DOCUMENTS_IDS_KEY)?.unwrap_or_default())
     }
 
     /* primary key */
 
     /// Writes the documents primary key, this is the field name that is used to store the id.
     pub fn put_primary_key(&self, wtxn: &mut RwTxn, primary_key: FieldId) -> heed::Result<()> {
-        self.main.put::<_, Str, OwnedType<FieldId>>(wtxn, PRIMARY_KEY_KEY, &primary_key)
+        self.main.remap_types::<Str, OwnedType<FieldId>>().put(wtxn, &PRIMARY_KEY_KEY, &primary_key)
     }
 
     /// Deletes the primary key of the documents, this can be done to reset indexes settings.
     pub fn delete_primary_key(&self, wtxn: &mut RwTxn) -> heed::Result<bool> {
-        self.main.delete::<_, Str>(wtxn, PRIMARY_KEY_KEY)
+        self.main.remap_key_type::<Str>().delete(wtxn, &PRIMARY_KEY_KEY)
     }
 
     /// Returns the documents primary key, `None` if it hasn't been defined.
     pub fn primary_key(&self, rtxn: &RoTxn) -> heed::Result<Option<FieldId>> {
-        self.main.get::<_, Str, OwnedType<FieldId>>(rtxn, PRIMARY_KEY_KEY)
+        self.main.remap_types::<Str, OwnedType<FieldId>>().get(rtxn, &PRIMARY_KEY_KEY)
     }
 
     /* external documents ids */
@@ -138,16 +143,16 @@ impl Index {
         let ExternalDocumentsIds { hard, soft } = external_documents_ids;
         let hard = hard.as_fst().as_bytes();
         let soft = soft.as_fst().as_bytes();
-        self.main.put::<_, Str, ByteSlice>(wtxn, HARD_EXTERNAL_DOCUMENTS_IDS_KEY, hard)?;
-        self.main.put::<_, Str, ByteSlice>(wtxn, SOFT_EXTERNAL_DOCUMENTS_IDS_KEY, soft)?;
+        self.main.remap_types::<Str, ByteSlice>().put(wtxn, &HARD_EXTERNAL_DOCUMENTS_IDS_KEY, &hard)?;
+        self.main.remap_types::<Str, ByteSlice>().put(wtxn, &SOFT_EXTERNAL_DOCUMENTS_IDS_KEY, &soft)?;
         Ok(())
     }
 
     /// Returns the external documents ids map which associate the external ids
     /// with the internal ids (i.e. `u32`).
     pub fn external_documents_ids<'t>(&self, rtxn: &'t RoTxn) -> anyhow::Result<ExternalDocumentsIds<'t>> {
-        let hard = self.main.get::<_, Str, ByteSlice>(rtxn, HARD_EXTERNAL_DOCUMENTS_IDS_KEY)?;
-        let soft = self.main.get::<_, Str, ByteSlice>(rtxn, SOFT_EXTERNAL_DOCUMENTS_IDS_KEY)?;
+        let hard = self.main.remap_types::<Str, ByteSlice>().get(rtxn, &HARD_EXTERNAL_DOCUMENTS_IDS_KEY)?;
+        let soft = self.main.remap_types::<Str, ByteSlice>().get(rtxn, &SOFT_EXTERNAL_DOCUMENTS_IDS_KEY)?;
         let hard = match hard {
             Some(hard) => fst::Map::new(hard)?.map_data(Cow::Borrowed)?,
             None => fst::Map::default().map_data(Cow::Owned)?,
@@ -164,13 +169,13 @@ impl Index {
     /// Writes the fields ids map which associate the documents keys with an internal field id
     /// (i.e. `u8`), this field id is used to identify fields in the obkv documents.
     pub fn put_fields_ids_map(&self, wtxn: &mut RwTxn, map: &FieldsIdsMap) -> heed::Result<()> {
-        self.main.put::<_, Str, SerdeJson<FieldsIdsMap>>(wtxn, FIELDS_IDS_MAP_KEY, map)
+        self.main.remap_types::<Str, SerdeJson<FieldsIdsMap>>().put(wtxn, &FIELDS_IDS_MAP_KEY, map)
     }
 
     /// Returns the fields ids map which associate the documents keys with an internal field id
     /// (i.e. `u8`), this field id is used to identify fields in the obkv documents.
     pub fn fields_ids_map(&self, rtxn: &RoTxn) -> heed::Result<FieldsIdsMap> {
-        Ok(self.main.get::<_, Str, SerdeJson<FieldsIdsMap>>(rtxn, FIELDS_IDS_MAP_KEY)?.unwrap_or_default())
+        Ok(self.main.remap_types::<Str, SerdeJson<FieldsIdsMap>>().get(rtxn, &FIELDS_IDS_MAP_KEY)?.unwrap_or_default())
     }
 
     /* displayed fields */
@@ -178,19 +183,19 @@ impl Index {
     /// Writes the fields ids that must be displayed in the defined order.
     /// There must be not be any duplicate field id.
     pub fn put_displayed_fields(&self, wtxn: &mut RwTxn, fields: &[FieldId]) -> heed::Result<()> {
-        self.main.put::<_, Str, ByteSlice>(wtxn, DISPLAYED_FIELDS_KEY, fields)
+        self.main.remap_key_type::<Str>().put(wtxn, &DISPLAYED_FIELDS_KEY, &fields)
     }
 
     /// Deletes the displayed fields ids, this will make the engine to display
     /// all the documents attributes in the order of the `FieldsIdsMap`.
     pub fn delete_displayed_fields(&self, wtxn: &mut RwTxn) -> heed::Result<bool> {
-        self.main.delete::<_, Str>(wtxn, DISPLAYED_FIELDS_KEY)
+        self.main.remap_key_type::<Str>().delete(wtxn, &DISPLAYED_FIELDS_KEY)
     }
 
     /// Returns the displayed fields ids in the order they must be returned. If it returns
     /// `None` it means that all the attributes are displayed in the order of the `FieldsIdsMap`.
     pub fn displayed_fields<'t>(&self, rtxn: &'t RoTxn) -> heed::Result<Option<&'t [FieldId]>> {
-        self.main.get::<_, Str, ByteSlice>(rtxn, DISPLAYED_FIELDS_KEY)
+        self.main.remap_key_type::<Str>().get(rtxn, &DISPLAYED_FIELDS_KEY)
     }
 
     /* searchable fields */
@@ -198,18 +203,18 @@ impl Index {
     /// Writes the searchable fields, when this list is specified, only these are indexed.
     pub fn put_searchable_fields(&self, wtxn: &mut RwTxn, fields: &[FieldId]) -> heed::Result<()> {
         assert!(fields.windows(2).all(|win| win[0] < win[1])); // is sorted
-        self.main.put::<_, Str, ByteSlice>(wtxn, SEARCHABLE_FIELDS_KEY, fields)
+        self.main.remap_types::<Str, ByteSlice>().put(wtxn, &SEARCHABLE_FIELDS_KEY, &fields)
     }
 
     /// Deletes the searchable fields, when no fields are specified, all fields are indexed.
     pub fn delete_searchable_fields(&self, wtxn: &mut RwTxn) -> heed::Result<bool> {
-        self.main.delete::<_, Str>(wtxn, SEARCHABLE_FIELDS_KEY)
+        self.main.remap_key_type::<Str>().delete(wtxn, &SEARCHABLE_FIELDS_KEY)
     }
 
     /// Returns the searchable fields ids, those are the fields that are indexed,
     /// if the searchable fields aren't there it means that **all** the fields are indexed.
     pub fn searchable_fields<'t>(&self, rtxn: &'t RoTxn) -> heed::Result<Option<&'t [FieldId]>> {
-        self.main.get::<_, Str, ByteSlice>(rtxn, SEARCHABLE_FIELDS_KEY)
+        self.main.remap_key_type::<Str>().get(rtxn, &SEARCHABLE_FIELDS_KEY)
     }
 
     /* faceted fields */
@@ -217,17 +222,17 @@ impl Index {
     /// Writes the facet fields ids associated with their facet type or `None` if
     /// the facet type is currently unknown.
     pub fn put_faceted_fields(&self, wtxn: &mut RwTxn, fields_types: &HashMap<FieldId, FacetType>) -> heed::Result<()> {
-        self.main.put::<_, Str, SerdeJson<_>>(wtxn, FACETED_FIELDS_KEY, fields_types)
+        self.main.remap_types::<Str, SerdeJson<_>>().put(wtxn, &FACETED_FIELDS_KEY, fields_types)
     }
 
     /// Deletes the facet fields ids associated with their facet type.
     pub fn delete_faceted_fields(&self, wtxn: &mut RwTxn) -> heed::Result<bool> {
-        self.main.delete::<_, Str>(wtxn, FACETED_FIELDS_KEY)
+        self.main.remap_key_type::<Str>().delete(wtxn, &FACETED_FIELDS_KEY)
     }
 
     /// Returns the facet fields ids associated with their facet type.
     pub fn faceted_fields(&self, wtxn: &RoTxn) -> heed::Result<HashMap<FieldId, FacetType>> {
-        Ok(self.main.get::<_, Str, SerdeJson<_>>(wtxn, FACETED_FIELDS_KEY)?.unwrap_or_default())
+        Ok(self.main.remap_types::<Str, SerdeJson<_>>().get(wtxn, &FACETED_FIELDS_KEY)?.unwrap_or_default())
     }
 
     /* faceted documents ids */
@@ -237,7 +242,7 @@ impl Index {
         let mut buffer = [0u8; FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..FACETED_DOCUMENTS_IDS_PREFIX.len()].clone_from_slice(FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
         *buffer.last_mut().unwrap() = field_id;
-        self.main.put::<_, ByteSlice, RoaringBitmapCodec>(wtxn, &buffer, docids)
+        self.main.remap_data_type::<RoaringBitmapCodec>().put(wtxn, &&buffer[..], docids)
     }
 
     /// Retrieve all the documents ids that faceted under this field id.
@@ -245,7 +250,7 @@ impl Index {
         let mut buffer = [0u8; FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..FACETED_DOCUMENTS_IDS_PREFIX.len()].clone_from_slice(FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
         *buffer.last_mut().unwrap() = field_id;
-        match self.main.get::<_, ByteSlice, RoaringBitmapCodec>(rtxn, &buffer)? {
+        match self.main.remap_data_type::<RoaringBitmapCodec>().get(rtxn, &&buffer[..])? {
             Some(docids) => Ok(docids),
             None => Ok(RoaringBitmap::new()),
         }
@@ -254,15 +259,15 @@ impl Index {
     /* criteria */
 
     pub fn put_criteria(&self, wtxn: &mut RwTxn, criteria: &[Criterion]) -> heed::Result<()> {
-        self.main.put::<_, Str, SerdeJson<&[Criterion]>>(wtxn, CRITERIA_KEY, &criteria)
+        self.main.remap_types::<Str, SerdeJson<&[Criterion]>>().put(wtxn, &CRITERIA_KEY, &criteria)
     }
 
     pub fn delete_criteria(&self, wtxn: &mut RwTxn) -> heed::Result<bool> {
-        self.main.delete::<_, Str>(wtxn, CRITERIA_KEY)
+        self.main.remap_key_type::<Str>().delete(wtxn, &CRITERIA_KEY)
     }
 
     pub fn criteria(&self, rtxn: &RoTxn) -> heed::Result<Vec<Criterion>> {
-        match self.main.get::<_, Str, SerdeJson<Vec<Criterion>>>(rtxn, CRITERIA_KEY)? {
+        match self.main.remap_types::<Str, SerdeJson<Vec<Criterion>>>().get(rtxn, &CRITERIA_KEY)? {
             Some(criteria) => Ok(criteria),
             None => Ok(default_criteria()),
         }
@@ -272,12 +277,12 @@ impl Index {
 
     /// Writes the FST which is the words dictionnary of the engine.
     pub fn put_words_fst<A: AsRef<[u8]>>(&self, wtxn: &mut RwTxn, fst: &fst::Set<A>) -> heed::Result<()> {
-        self.main.put::<_, Str, ByteSlice>(wtxn, WORDS_FST_KEY, fst.as_fst().as_bytes())
+        self.main.remap_key_type::<Str>().put(wtxn, &WORDS_FST_KEY, &fst.as_fst().as_bytes())
     }
 
     /// Returns the FST which is the words dictionnary of the engine.
     pub fn words_fst<'t>(&self, rtxn: &'t RoTxn) -> anyhow::Result<fst::Set<Cow<'t, [u8]>>> {
-        match self.main.get::<_, Str, ByteSlice>(rtxn, WORDS_FST_KEY)? {
+        match self.main.remap_key_type::<Str>().get(rtxn, &WORDS_FST_KEY)? {
             Some(bytes) => Ok(fst::Set::new(bytes)?.map_data(Cow::Borrowed)?),
             None => Ok(fst::Set::default().map_data(Cow::Owned)?),
         }

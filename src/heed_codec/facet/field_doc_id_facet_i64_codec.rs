@@ -21,7 +21,7 @@ impl<'a> heed::BytesDecode<'a> for FieldDocIdFacetI64Codec {
     }
 }
 
-impl<'a> heed::BytesEncode<'a> for FieldDocIdFacetI64Codec {
+impl heed::BytesEncode for FieldDocIdFacetI64Codec {
     type EItem = (FieldId, DocumentId, i64);
 
     fn bytes_encode((field_id, document_id, value): &Self::EItem) -> Option<Cow<[u8]>> {

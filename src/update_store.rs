@@ -122,7 +122,7 @@ impl<M: 'static, N: 'static> UpdateStore<M, N> {
         let update_key = BEU64::new(update_id);
 
         self.pending_meta.put(&mut wtxn, &update_key, meta)?;
-        self.pending.put(&mut wtxn, &update_key, content)?;
+        self.pending.put(&mut wtxn, &update_key, &content)?;
 
         wtxn.commit()?;
 

@@ -11,7 +11,7 @@ impl heed::BytesDecode<'_> for RoaringBitmapCodec {
     }
 }
 
-impl heed::BytesEncode<'_> for RoaringBitmapCodec {
+impl heed::BytesEncode for RoaringBitmapCodec {
     type EItem = RoaringBitmap;
 
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {

@@ -76,7 +76,9 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             word_docids,
             docid_word_positions,
             word_pair_proximity_docids,
-            facet_field_id_value_docids,
+            facet_field_id_str_docids,
+            facet_field_id_f64_docids,
+            facet_field_id_i64_docids,
             field_id_docid_facet_values,
             documents,
         } = self.index;
@@ -89,7 +91,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             // content itself. It's faster to acquire a cursor to get and delete,
             // as we avoid traversing the LMDB B-Tree two times but only once.
             let key = BEU32::new(docid);
-            let mut iter = documents.range_mut(self.wtxn, &(key..=key))?;
+            let mut iter = documents.range_mut(self.wtxn, key..=key)?;
             if let Some((_key, obkv)) = iter.next().transpose()? {
                 if let Some(content) = obkv.get(id_field) {
                     let external_id: SmallString32 = serde_json::from_slice(content).unwrap();
@@ -133,7 +135,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             // We create an iterator to be able to get the content and delete the word docids.
             // It's faster to acquire a cursor to get and delete or put, as we avoid traversing
             // the LMDB B-Tree two times but only once.
-            let mut iter = word_docids.prefix_iter_mut(self.wtxn, &word)?;
+            let mut iter = word_docids.prefix_iter_mut(self.wtxn, &word.as_str())?;
             if let Some((key, mut docids)) = iter.next().transpose()? {
                 if key == word.as_ref() {
                     let previous_len = docids.len();
@@ -142,7 +144,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
                         iter.del_current()?;
                         *must_remove = true;
                     } else if docids.len() != previous_len {
-                        iter.put_current(key, &docids)?;
+                        iter.put_current(&key, &docids)?;
                     }
                 }
             }
@@ -181,7 +183,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             if docids.is_empty() {
                 iter.del_current()?;
             } else if docids.len() != previous_len {
-                iter.put_current(bytes, &docids)?;
+                iter.put_current(&&bytes[..], &docids)?;
             }
         }
 
@@ -195,7 +197,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             self.index.put_faceted_documents_ids(self.wtxn, field_id, &docids)?;
 
             // We delete the entries that are part of the documents ids.
-            let iter = field_id_docid_facet_values.prefix_iter_mut(self.wtxn, &[field_id])?;
+            let iter = field_id_docid_facet_values.prefix_iter_mut(self.wtxn, &&[field_id][..])?;
             match facet_type {
                 FacetType::String => {
                     let mut iter = iter.remap_key_type::<FieldDocIdFacetStringCodec>();
@@ -227,20 +229,27 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             }
         }
 
+        let facet_dbs = [
+            facet_field_id_str_docids.remap_key_type::<ByteSlice>(),
+            facet_field_id_f64_docids.remap_key_type::<ByteSlice>(),
+            facet_field_id_i64_docids.remap_key_type::<ByteSlice>(),
+        ];
+
         // We delete the documents ids that are under the facet field id values.
-        let mut iter = facet_field_id_value_docids.iter_mut(self.wtxn)?;
-        while let Some(result) = iter.next() {
-            let (bytes, mut docids) = result?;
-            let previous_len = docids.len();
-            docids.difference_with(&self.documents_ids);
-            if docids.is_empty() {
-                iter.del_current()?;
-            } else if docids.len() != previous_len {
-                iter.put_current(bytes, &docids)?;
+        for db in facet_dbs.iter() {
+            let mut iter = db.iter_mut(self.wtxn)?;
+            while let Some(result) = iter.next() {
+                let (bytes, mut docids) = result?;
+                let previous_len = docids.len();
+                docids.difference_with(&self.documents_ids);
+                if docids.is_empty() {
+                    iter.del_current()?;
+                } else if docids.len() != previous_len {
+                    iter.put_current(&bytes, &docids)?;
+                }
             }
         }
 
-        drop(iter);
 
         Ok(self.documents_ids.len() as usize)
     }

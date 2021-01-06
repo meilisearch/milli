@@ -252,7 +252,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 mod tests {
     use super::*;
     use crate::update::{IndexDocuments, UpdateFormat};
-    use heed::EnvOpenOptions;
+    use heed::{EnvOpenOptions, types::ByteSlice};
     use maplit::hashmap;
 
     #[test]
@@ -447,7 +447,11 @@ mod tests {
         let fields_ids = index.faceted_fields(&rtxn).unwrap();
         assert_eq!(fields_ids, hashmap!{ 1 => FacetType::Integer });
         // Only count the field_id 0 and level 0 facet values.
-        let count = index.facet_field_id_value_docids.prefix_iter(&rtxn, &[1, 0]).unwrap().count();
+        let count = index
+            .facet_field_id_i64_docids
+            .remap_key_type::<ByteSlice>()
+            .prefix_iter(&rtxn, &&[1, 0][..]).unwrap()
+            .count();
         assert_eq!(count, 3);
         drop(rtxn);
 
@@ -461,7 +465,11 @@ mod tests {
 
         let rtxn = index.read_txn().unwrap();
         // Only count the field_id 0 and level 0 facet values.
-        let count = index.facet_field_id_value_docids.prefix_iter(&rtxn, &[1, 0]).unwrap().count();
+        let count = index
+            .facet_field_id_i64_docids
+            .remap_key_type::<ByteSlice>()
+            .prefix_iter(&rtxn, &&[1, 0][..]).unwrap()
+            .count();
         assert_eq!(count, 4);
         drop(rtxn);
     }

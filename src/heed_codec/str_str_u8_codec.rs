@@ -1,9 +1,9 @@
 use std::borrow::Cow;
-use std::str;
+use std::{str, marker};
 
-pub struct StrStrU8Codec;
+pub struct StrStrU8Codec<'a>(marker::PhantomData<&'a ()>);
 
-impl<'a> heed::BytesDecode<'a> for StrStrU8Codec {
+impl<'a> heed::BytesDecode<'a> for StrStrU8Codec<'_> {
     type DItem = (&'a str, &'a str, u8);
 
     fn bytes_decode(bytes: &'a [u8]) -> Option<Self::DItem> {
@@ -16,7 +16,7 @@ impl<'a> heed::BytesDecode<'a> for StrStrU8Codec {
     }
 }
 
-impl<'a> heed::BytesEncode<'a> for StrStrU8Codec {
+impl<'a> heed::BytesEncode for StrStrU8Codec<'a> {
     type EItem = (&'a str, &'a str, u8);
 
     fn bytes_encode((s1, s2, n): &Self::EItem) -> Option<Cow<[u8]>> {

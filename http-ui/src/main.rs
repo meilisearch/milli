@@ -700,6 +700,8 @@ async fn main() -> anyhow::Result<()> {
                 search.facet_condition(condition);
             }
 
+            eprintln!("{:?}", search);
+
             let SearchResult { found_words, candidates, documents_ids } = search.execute().unwrap();
 
             let number_of_candidates = candidates.len();

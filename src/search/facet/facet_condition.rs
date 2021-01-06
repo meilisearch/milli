@@ -4,17 +4,16 @@ use std::ops::Bound::{self, Included, Excluded};
 use std::str::FromStr;
 
 use either::Either;
-use heed::types::{ByteSlice, DecodeIgnore};
+use heed::types::DecodeIgnore;
 use log::debug;
-use num_traits::Bounded;
 use pest::error::{Error as PestError, ErrorVariant};
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use roaring::RoaringBitmap;
 
+use crate::facet::FacetBounded;
 use crate::facet::FacetType;
-use crate::heed_codec::facet::FacetValueStringCodec;
-use crate::heed_codec::facet::{FacetLevelValueI64Codec, FacetLevelValueF64Codec};
+use crate::heed_codec::facet::FacetLevelValueStrCodec;
 use crate::{Index, FieldId, FieldsIdsMap, CboRoaringBitmapCodec};
 
 use super::FacetRange;
@@ -427,7 +426,7 @@ impl FacetCondition {
     /// going deeper through the levels.
     fn explore_facet_levels<'t, T: 't, KC>(
         rtxn: &'t heed::RoTxn,
-        db: heed::Database<ByteSlice, CboRoaringBitmapCodec>,
+        db: heed::Database<KC, CboRoaringBitmapCodec>,
         field_id: FieldId,
         level: u8,
         left: Bound<T>,
@@ -435,9 +434,9 @@ impl FacetCondition {
         output: &mut RoaringBitmap,
     ) -> anyhow::Result<()>
     where
-        T: Copy + PartialEq + PartialOrd + Bounded + Debug,
+        T: Copy + PartialEq + PartialOrd + FacetBounded + Debug,
         KC: heed::BytesDecode<'t, DItem = (u8, u8, T, T)>,
-        KC: for<'x> heed::BytesEncode<'x, EItem = (u8, u8, T, T)>,
+        KC: heed::BytesEncode<EItem = (u8, u8, T, T)>,
     {
         match (left, right) {
             // If the request is an exact value we must go directly to the deepest level.
@@ -505,14 +504,14 @@ impl FacetCondition {
     fn evaluate_number_operator<'t, T: 't, KC>(
         rtxn: &'t heed::RoTxn,
         index: &Index,
-        db: heed::Database<ByteSlice, CboRoaringBitmapCodec>,
+        db: heed::Database<KC, CboRoaringBitmapCodec>,
         field_id: FieldId,
         operator: FacetNumberOperator<T>,
     ) -> anyhow::Result<RoaringBitmap>
     where
-        T: Copy + PartialEq + PartialOrd + Bounded + Debug,
+        T: Copy + PartialEq + PartialOrd + FacetBounded + Debug,
         KC: heed::BytesDecode<'t, DItem = (u8, u8, T, T)>,
-        KC: for<'x> heed::BytesEncode<'x, EItem = (u8, u8, T, T)>,
+        KC: heed::BytesEncode<EItem = (u8, u8, T, T)>,
     {
         // Make sure we always bound the ranges with the field id and the level,
         // as the facets values are all in the same database and prefixed by the
@@ -534,7 +533,7 @@ impl FacetCondition {
         // Ask for the biggest value that can exist for this specific field, if it exists
         // that's fine if it don't, the value just before will be returned instead.
         let biggest_level = db
-            .remap_types::<KC, DecodeIgnore>()
+            .remap_data_type::<DecodeIgnore>()
             .get_lower_than_or_equal_to(rtxn, &(field_id, u8::MAX, T::max_value(), T::max_value()))?
             .and_then(|((id, level, _, _), _)| if id == field_id { Some(level) } else { None });
 
@@ -551,14 +550,14 @@ impl FacetCondition {
     fn evaluate_string_operator(
         rtxn: &heed::RoTxn,
         index: &Index,
-        db: heed::Database<FacetValueStringCodec, CboRoaringBitmapCodec>,
+        db: heed::Database<FacetLevelValueStrCodec, CboRoaringBitmapCodec>,
         field_id: FieldId,
         operator: &FacetStringOperator,
     ) -> anyhow::Result<RoaringBitmap>
     {
         match operator {
             FacetStringOperator::Equal(string) => {
-                match db.get(rtxn, &(field_id, string))? {
+                match db.get(rtxn, &(field_id, 0, string, ""))? {
                     Some(docids) => Ok(docids),
                     None => Ok(RoaringBitmap::new())
                 }
@@ -578,16 +577,17 @@ impl FacetCondition {
         index: &Index,
     ) -> anyhow::Result<RoaringBitmap>
     {
-        let db = index.facet_field_id_value_docids;
         match self {
             OperatorI64(fid, op) => {
-                Self::evaluate_number_operator::<i64, FacetLevelValueI64Codec>(rtxn, index, db, *fid, *op)
+                let db = index.facet_field_id_i64_docids;
+                Self::evaluate_number_operator::<i64, _>(rtxn, index, db, *fid, *op)
             },
             OperatorF64(fid, op) => {
-                Self::evaluate_number_operator::<f64, FacetLevelValueF64Codec>(rtxn, index, db, *fid, *op)
+                let db = index.facet_field_id_f64_docids;
+                Self::evaluate_number_operator::<f64, _>(rtxn, index, db, *fid, *op)
             },
             OperatorString(fid, op) => {
-                let db = db.remap_key_type::<FacetValueStringCodec>();
+                let db = index.facet_field_id_str_docids;
                 Self::evaluate_string_operator(rtxn, index, db, *fid, op)
             },
             Or(lhs, rhs) => {

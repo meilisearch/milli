@@ -1,10 +1,10 @@
 use std::borrow::Cow;
 use std::convert::TryInto;
-use std::str;
+use std::{str, marker};
 
-pub struct BEU32StrCodec;
+pub struct BEU32StrCodec<'a>(marker::PhantomData<&'a ()>);
 
-impl<'a> heed::BytesDecode<'a> for BEU32StrCodec {
+impl<'a> heed::BytesDecode<'a> for BEU32StrCodec<'_> {
     type DItem = (u32, &'a str);
 
     fn bytes_decode(bytes: &'a [u8]) -> Option<Self::DItem> {
@@ -15,7 +15,7 @@ impl<'a> heed::BytesDecode<'a> for BEU32StrCodec {
     }
 }
 
-impl<'a> heed::BytesEncode<'a> for BEU32StrCodec {
+impl<'a> heed::BytesEncode for BEU32StrCodec<'a> {
     type EItem = (u32, &'a str);
 
     fn bytes_encode((n, s): &Self::EItem) -> Option<Cow<[u8]>> {

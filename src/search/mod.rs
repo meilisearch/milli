@@ -122,7 +122,7 @@ impl<'a> Search<'a> {
             while let Some((word, state)) = stream.next() {
 
                 let word = std::str::from_utf8(word)?;
-                let docids = self.index.word_docids.get(self.rtxn, word)?.unwrap();
+                let docids = self.index.word_docids.get(self.rtxn, &word)?.unwrap();
                 let distance = dfa.distance(state);
                 unions_docids.union_with(&docids);
                 acc_derived_words.insert(word.to_string(), (distance.to_u8(), docids));
@@ -174,7 +174,7 @@ impl<'a> Search<'a> {
                     for docid in documents_ids.iter() {
                         let left = (field_id, docid, f64::MIN);
                         let right = (field_id, docid, f64::MAX);
-                        let mut iter = db.range(self.rtxn, &(left..=right))?;
+                        let mut iter = db.range(self.rtxn, left..=right)?;
                         let entry = if ascending { iter.next() } else { iter.last() };
                         if let Some(((_, _, value), ())) = entry.transpose()? {
                             docids_values.push((docid, OrderedFloat(value)));
@@ -195,7 +195,8 @@ impl<'a> Search<'a> {
                     };
                     let mut limit_tmp = limit;
                     let mut output = Vec::new();
-                    for result in facet_fn(self.rtxn, self.index, field_id, documents_ids.clone())? {
+                    let db = self.index.facet_field_id_f64_docids;
+                    for result in facet_fn(self.rtxn, db, field_id, documents_ids.clone())? {
                         let (_val, docids) = result?;
                         limit_tmp = limit_tmp.saturating_sub(docids.len() as usize);
                         output.push(docids);
@@ -211,7 +212,7 @@ impl<'a> Search<'a> {
                     for docid in documents_ids.iter() {
                         let left = (field_id, docid, i64::MIN);
                         let right = (field_id, docid, i64::MAX);
-                        let mut iter = db.range(self.rtxn, &(left..=right))?;
+                        let mut iter = db.range(self.rtxn, left..=right)?;
                         let entry = if ascending { iter.next() } else { iter.last() };
                         if let Some(((_, _, value), ())) = entry.transpose()? {
                             docids_values.push((docid, value));
@@ -232,7 +233,8 @@ impl<'a> Search<'a> {
                     };
                     let mut limit_tmp = limit;
                     let mut output = Vec::new();
-                    for result in facet_fn(self.rtxn, self.index, field_id, documents_ids.clone())? {
+                    let db = self.index.facet_field_id_i64_docids;
+                    for result in facet_fn(self.rtxn, db, field_id, documents_ids.clone())? {
                         let (_val, docids) = result?;
                         limit_tmp = limit_tmp.saturating_sub(docids.len() as usize);
                         output.push(docids);
