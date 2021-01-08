@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use anyhow::{ensure, Context};
+use anyhow::Context;
 use grenad::CompressionType;
 use rayon::ThreadPool;
 
 use crate::update::index_documents::{Transform, IndexDocumentsMethod};
 use crate::update::{ClearDocuments, IndexDocuments, UpdateIndexingStep};
+use crate::{Index, FieldsIdsMap, FieldId};
 use crate::facet::FacetType;
-use crate::{Index, FieldsIdsMap, Criterion};
+use crate::criterion::Criterion;
 
 pub struct Settings<'a, 't, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -26,7 +27,7 @@ pub struct Settings<'a, 't, 'u, 'i> {
     // however if it is `Some(None)` it means that the user forced a reset of the setting.
     searchable_fields: Option<Option<Vec<String>>>,
     displayed_fields: Option<Option<Vec<String>>>,
-    faceted_fields: Option<HashMap<String, String>>,
+    faceted_fields: Option<Option<HashMap<String, String>>>,
     criteria: Option<Option<Vec<String>>>,
 }
 
@@ -67,7 +68,11 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
     }
 
     pub fn set_faceted_fields(&mut self, names_facet_types: HashMap<String, String>) {
-        self.faceted_fields = Some(names_facet_types);
+        self.faceted_fields = Some(Some(names_facet_types));
+    }
+
+    pub fn reset_faceted_fields(&mut self) {
+        self.faceted_fields = Some(None);
     }
 
     pub fn reset_criteria(&mut self) {
@@ -78,107 +83,13 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.criteria = Some(Some(criteria));
     }
 
-    pub fn execute<F>(self, progress_callback: F) -> anyhow::Result<()>
+    fn reindex<F>(&mut self, cb: &F, primary_key: FieldId) -> anyhow::Result<()>
     where
         F: Fn(UpdateIndexingStep) + Sync
+
     {
-        let mut updated_searchable_fields = None;
-        let mut updated_faceted_fields = None;
-        let mut updated_displayed_fields = None;
-        let mut updated_criteria = None;
-
-        // Construct the new FieldsIdsMap based on the searchable fields order.
         let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-        let mut fields_ids_map = match self.searchable_fields {
-            Some(Some(searchable_fields)) => {
-                let mut new_fields_ids_map = FieldsIdsMap::new();
-                let mut new_searchable_fields = Vec::new();
 
-                for name in searchable_fields {
-                    let id = new_fields_ids_map.insert(&name).context("field id limit reached")?;
-                    new_searchable_fields.push(id);
-                }
-
-                for (_, name) in fields_ids_map.iter() {
-                    new_fields_ids_map.insert(name).context("field id limit reached")?;
-                }
-
-                updated_searchable_fields = Some(Some(new_searchable_fields));
-                new_fields_ids_map
-            },
-            Some(None) => {
-                updated_searchable_fields = Some(None);
-                fields_ids_map
-            },
-            None => fields_ids_map,
-        };
-
-        // We compute or generate the new primary key field id.
-        // TODO make the primary key settable.
-        let primary_key = match self.index.primary_key(&self.wtxn)? {
-            Some(id) => {
-                let current_fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-                let name = current_fields_ids_map.name(id).unwrap();
-                fields_ids_map.insert(name).context("field id limit reached")?
-            },
-            None => fields_ids_map.insert("id").context("field id limit reached")?,
-        };
-
-        let current_faceted_fields = self.index.faceted_fields(self.wtxn)?;
-        if let Some(fields_names_facet_types) = self.faceted_fields {
-            let mut faceted_fields = HashMap::new();
-            for (name, sftype) in fields_names_facet_types {
-                let ftype = FacetType::from_str(&sftype).with_context(|| format!("parsing facet type {:?}", sftype))?;
-                let id = fields_ids_map.insert(&name).context("field id limit reached")?;
-                match current_faceted_fields.get(&id) {
-                    Some(pftype) => {
-                        ensure!(ftype == *pftype, "{} facet type changed from {} to {}", name, ftype, pftype);
-                        faceted_fields.insert(id, ftype)
-                    },
-                    None => faceted_fields.insert(id, ftype),
-                };
-            }
-
-            updated_faceted_fields = Some(faceted_fields);
-        }
-
-        // Check that the displayed attributes have been specified.
-        if let Some(value) = self.displayed_fields {
-            match value {
-                Some(names) => {
-                    let mut new_displayed_fields = Vec::new();
-                    for name in names {
-                        let id = fields_ids_map.insert(&name).context("field id limit reached")?;
-                        new_displayed_fields.push(id);
-                    }
-                    updated_displayed_fields = Some(Some(new_displayed_fields));
-                }
-                None => updated_displayed_fields = Some(None),
-            }
-        }
-
-        if let Some(criteria) = self.criteria {
-            match criteria {
-                Some(criteria_names) => {
-                    let mut new_criteria = Vec::new();
-                    for name in criteria_names {
-                        let criterion = Criterion::from_str(&mut fields_ids_map, &name)?;
-                        if let Some(fid) = criterion.field_id() {
-                            let name = fields_ids_map.name(fid).unwrap();
-                            let faceted_fields = updated_faceted_fields.as_ref().unwrap_or(&current_faceted_fields);
-                            ensure!(faceted_fields.contains_key(&fid), "criterion field {} must be faceted", name);
-                        }
-                        new_criteria.push(criterion);
-                    }
-                    updated_criteria = Some(Some(new_criteria));
-                },
-                None => updated_criteria = Some(None),
-            }
-        }
-
-        // If any setting have modified any of the datastructures it means that we need
-        // to retrieve the documents and then reindex then with the new settings.
-        if updated_searchable_fields.is_some() || updated_faceted_fields.is_some() {
             let transform = Transform {
                 rtxn: &self.wtxn,
                 index: self.index,
@@ -195,24 +106,6 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             // We remap the documents fields based on the new `FieldsIdsMap`.
             let output = transform.remap_index_documents(primary_key, fields_ids_map.clone())?;
 
-            // We write the new FieldsIdsMap to the database
-            // this way next indexing methods will be based on that.
-            self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
-
-            if let Some(faceted_fields) = updated_faceted_fields {
-                // We write the faceted_fields fields into the database here.
-                self.index.put_faceted_fields(self.wtxn, &faceted_fields)?;
-            }
-
-            if let Some(searchable_fields) = updated_searchable_fields {
-                // The new searchable fields are also written down to make sure
-                // that the IndexDocuments system takes only these ones into account.
-                match searchable_fields {
-                    Some(fields) => self.index.put_searchable_fields(self.wtxn, &fields)?,
-                    None => self.index.delete_searchable_fields(self.wtxn).map(drop)?,
-                }
-            }
-
             // We clear the full database (words-fst, documents ids and documents content).
             ClearDocuments::new(self.wtxn, self.index).execute()?;
 
@@ -227,23 +120,179 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             indexing_builder.chunk_compression_level = self.chunk_compression_level;
             indexing_builder.chunk_fusing_shrink_size = self.chunk_fusing_shrink_size;
             indexing_builder.thread_pool = self.thread_pool;
-            indexing_builder.execute_raw(output, &progress_callback)?;
-        }
+            indexing_builder.execute_raw(output, &cb)?;
+            Ok(())
+    }
 
-        if let Some(displayed_fields) = updated_displayed_fields {
-            match displayed_fields {
-                Some(fields) => self.index.put_displayed_fields(self.wtxn, &fields)?,
-                None => self.index.delete_displayed_fields(self.wtxn).map(drop)?,
+    fn update_displayed(&mut self) -> anyhow::Result<bool> {
+        match self.displayed_fields {
+            Some(ref displayed_fields) => {
+                match displayed_fields {
+                    Some(fields) => {
+                        let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+                        let mut new_displayed = Vec::with_capacity(fields.len());
+                        for field in fields {
+                            let id = fields_ids_map.insert(&field).context("field id limit exceeded")?;
+                            new_displayed.push(id);
+                        }
+                        self.index.put_displayed_fields(self.wtxn, &new_displayed)?;
+                        self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
+                    }
+                    None => { self.index.delete_displayed_fields(self.wtxn)?; },
+                }
+                Ok(true)
             }
-        }
+            None => Ok(false),
+        } 
+    }
 
-        if let Some(criteria) = updated_criteria {
+    /// Udpates the index's searchable attributes. This causes the field map to be recomputed to
+    /// reflect the order of the searchable attributes. This causes all the other settings to be
+    /// reset with the new id values.
+    fn update_searchable(&mut self) -> anyhow::Result<bool> {
+        match self.searchable_fields {
+            Some(ref searchable_fields) => {
+                match searchable_fields {
+                    Some(fields) => {
+                        // every time the searchable attributes are updated, we need to update the
+                        // ids for any settings that uses the facets. (displayed_fields,
+                        // faceted_fields)
+                        let old_fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+                        let old_primary_key = self.index
+                            .primary_key(self.wtxn)?
+                            .map(|id| old_fields_ids_map.name(id).expect("unexpected error when retrieving attribute name; corrupted data"));
+                        let old_displayed_names = self.index
+                            .displayed_fields(self.wtxn)?
+                            .map(|fields| fields
+                                .iter()
+                                .map(|f| old_fields_ids_map.name(*f)
+                                //At this point we need to crash, the data integrity is compromised
+                                .expect("unexpected error when retrieving attribute name; corrupted data"))
+                                .collect::<Vec<_>>());
+                        let old_facets: HashMap<_, _> = self.index
+                            .faceted_fields(self.wtxn)?
+                            .iter()
+                            .map(|(id, ty)| (old_fields_ids_map.name(*id).expect("unexpected error when retrieving attribute name; corrupted data"), *ty))
+                            .collect();
+
+                        let mut new_searchable = Vec::with_capacity(fields.len());
+                        let mut new_fields_ids_map = FieldsIdsMap::new();
+
+                        // Add all the searchable attributes to the field map, and then add the
+                        // remaining fields from the old field map to the new one
+                        for name in fields {
+                            let id = new_fields_ids_map
+                                .insert(&name)
+                                .context("field id limit exceeded")?;
+                            if !new_searchable.contains(&id) {
+                                new_searchable.push(id);
+                            }
+                        }
+
+                        for (_, name) in old_fields_ids_map.iter() {
+                            new_fields_ids_map
+                                .insert(&name)
+                                .context("field id limit exceeded")?;
+                        }
+
+                        self.index.put_searchable_fields(self.wtxn, &new_searchable)?;
+
+                        // If there were displayed or faceted fields, restore them with the new ids.
+                        if let Some(old_displayed_names) = old_displayed_names {
+                            let new_displayed: Vec<_> = old_displayed_names
+                                .iter()
+                                .map(|name| new_fields_ids_map.id(name).unwrap())
+                                .collect();
+                            self.index.put_displayed_fields(self.wtxn, &new_displayed)?;
+                        }
+
+                        if let Some(old_primary_key) = old_primary_key {
+                            let new_primary_key = new_fields_ids_map
+                                .insert(old_primary_key)
+                                .context("field id limit exceeded")?;
+                            self.index.put_primary_key(self.wtxn, new_primary_key)?;
+                        }
+
+                        let new_facets = old_facets
+                            .iter()
+                            .map(|(name, ty)| (new_fields_ids_map.id(name).unwrap(), *ty))
+                            .collect();
+                        self.index.put_faceted_fields(self.wtxn, &new_facets)?;
+                        self.index.put_fields_ids_map(self.wtxn, &new_fields_ids_map)?;
+                    }
+                    None => { self.index.delete_searchable_fields(self.wtxn)?; },
+                }
+                Ok(true)
+            }
+            None => Ok(false),
+        } 
+    }
+
+    fn update_facets(&mut self) -> anyhow::Result<bool> {
+        match self.faceted_fields {
+            Some(ref facet_fields) => {
+                match facet_fields {
+                    Some(fields) => {
+                        let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+                        let mut new_facets = HashMap::new();
+                        for (name, ty) in fields {
+                            let id = fields_ids_map.insert(name).context("field id limit exceeded")?;
+                            let ty = FacetType::from_str(&ty)?;
+                            new_facets.insert(id, ty);
+                        }
+                        self.index.put_faceted_fields(self.wtxn, &new_facets)?;
+                        self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
+                    }
+                    None => { self.index.delete_faceted_fields(self.wtxn)?; },
+                }
+                Ok(true)
+            }
+            None => Ok(false)
+        }
+    }
+
+    fn update_primary_key(&mut self) -> anyhow::Result<FieldId> {
+        let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+        let primary_key_id = match self.index.primary_key(&self.wtxn)? {
+            Some(id) => id,
+            None => fields_ids_map.insert("id").context("field id limit reached")?,
+        };
+        self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
+
+        Ok(primary_key_id)
+    }
+
+    fn update_criteria(&mut self) -> anyhow::Result<()> {
+        if let Some(ref criteria) = self.criteria {
             match criteria {
-                Some(criteria) => self.index.put_criteria(self.wtxn, &criteria)?,
-                None => self.index.delete_criteria(self.wtxn).map(drop)?,
+                Some(fields) => {
+                    let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+                    let mut new_criteria = Vec::new();
+                    for name in fields {
+                        let criterion = Criterion::from_str(&mut fields_ids_map, &name)?;
+                        new_criteria.push(criterion);
+                    }
+                    self.index.put_criteria(self.wtxn, &new_criteria)?;
+                    self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
+                }
+                None => { self.index.delete_criteria(self.wtxn)?; }
             }
         }
+        Ok(())
+    }
 
+    pub fn execute<F>(mut self, progress_callback: F) -> anyhow::Result<()>
+    where
+        F: Fn(UpdateIndexingStep) + Sync
+    {
+        self.update_displayed()?;
+        self.update_criteria()?;
+        let primary_key = self.update_primary_key()?;
+
+        // Use of eager operator | so both operand are evaluated unconditionally
+        if self.update_facets()? | self.update_searchable()? {
+            self.reindex(&progress_callback, primary_key)?;
+        }
         Ok(())
     }
 }
@@ -251,9 +300,12 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update::{IndexDocuments, UpdateFormat};
+
     use heed::EnvOpenOptions;
     use maplit::hashmap;
+
+    use crate::facet::FacetType;
+    use crate::update::{IndexDocuments, UpdateFormat};
 
     #[test]
     fn set_and_reset_searchable_fields() {
@@ -463,6 +515,51 @@ mod tests {
         // Only count the field_id 0 and level 0 facet values.
         let count = index.facet_field_id_value_docids.prefix_iter(&rtxn, &[1, 0]).unwrap().count();
         assert_eq!(count, 4);
+        drop(rtxn);
+    }
+
+    #[test]
+    fn setting_searchable_recomputes_other_settings() {
+        let path = tempfile::tempdir().unwrap();
+        let mut options = EnvOpenOptions::new();
+        options.map_size(10 * 1024 * 1024); // 10 MB
+        let index = Index::new(options, &path).unwrap();
+
+        // Set all the settings except searchable
+        let mut wtxn = index.write_txn().unwrap();
+        let mut builder = Settings::new(&mut wtxn, &index);
+        builder.set_displayed_fields(vec!["hello".to_string()]);
+        builder.set_faceted_fields(hashmap!{ "age".into() => "integer".into() });
+        builder.set_criteria(vec!["asc(toto)".to_string()]);
+        builder.execute(|_| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        // check the output
+        let rtxn = index.read_txn().unwrap();
+        assert_eq!([0], index.displayed_fields(&rtxn).unwrap().unwrap());
+        assert_eq!(2, index.primary_key(&rtxn).unwrap().unwrap());
+        assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
+        assert_eq!(
+            r##"FieldsIdsMap { names_ids: {"age": 3, "hello": 0, "id": 2, "toto": 1}, ids_names: {0: "hello", 1: "toto", 2: "id", 3: "age"}, next_id: Some(4) }"##,
+            format!("{:?}", index.fields_ids_map(&rtxn).unwrap())
+        );
+        drop(rtxn);
+
+        // We set toto and age as searchable to force reordering of the fields
+        let mut wtxn = index.write_txn().unwrap();
+        let mut builder = Settings::new(&mut wtxn, &index);
+        builder.set_searchable_fields(vec!["toto".to_string(), "age".to_string()]);
+        builder.execute(|_| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        let rtxn = index.read_txn().unwrap();
+        assert_eq!([2], index.displayed_fields(&rtxn).unwrap().unwrap());
+        assert_eq!(2, index.primary_key(&rtxn).unwrap().unwrap());
+        assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
+        assert_eq!(
+            r##"FieldsIdsMap { names_ids: {"age": 1, "hello": 2, "id": 3, "toto": 0}, ids_names: {0: "toto", 1: "age", 2: "hello", 3: "id"}, next_id: Some(4) }"##,
+            format!("{:?}", index.fields_ids_map(&rtxn).unwrap())
+        );
         drop(rtxn);
     }
 }
