@@ -4,10 +4,11 @@ use std::str::FromStr;
 use anyhow::Context;
 use grenad::CompressionType;
 use rayon::ThreadPool;
+use itertools::Itertools;
 
 use crate::update::index_documents::{Transform, IndexDocumentsMethod};
 use crate::update::{ClearDocuments, IndexDocuments, UpdateIndexingStep};
-use crate::{Index, FieldsIdsMap, FieldId};
+use crate::{Index, FieldsIdsMap};
 use crate::facet::FacetType;
 use crate::criterion::Criterion;
 
@@ -83,7 +84,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.criteria = Some(Some(criteria));
     }
 
-    fn reindex<F>(&mut self, cb: &F, primary_key: FieldId) -> anyhow::Result<()>
+    fn reindex<F>(&mut self, cb: &F, primary_key: String) -> anyhow::Result<()>
     where
         F: Fn(UpdateIndexingStep) + Sync
 
@@ -130,12 +131,19 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 match displayed_fields {
                     Some(fields) => {
                         let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-                        let mut new_displayed = Vec::with_capacity(fields.len());
-                        for field in fields {
-                            let id = fields_ids_map.insert(&field).context("field id limit exceeded")?;
-                            new_displayed.push(id);
+                        // fields are deduplicated, only the first occurence is taken into account
+                        let names: Vec<_> = fields
+                            .iter()
+                            .unique()
+                            .map(String::as_str)
+                            .collect();
+
+                        for name in names.iter() {
+                            fields_ids_map
+                                .insert(name)
+                                .context("field id limit exceeded")?;
                         }
-                        self.index.put_displayed_fields(self.wtxn, &new_displayed)?;
+                        self.index.put_displayed_fields(self.wtxn, &names)?;
                         self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
                     }
                     None => { self.index.delete_displayed_fields(self.wtxn)?; },
@@ -143,12 +151,11 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 Ok(true)
             }
             None => Ok(false),
-        } 
+        }
     }
 
     /// Udpates the index's searchable attributes. This causes the field map to be recomputed to
-    /// reflect the order of the searchable attributes. This causes all the other settings to be
-    /// reset with the new id values.
+    /// reflect the order of the searchable attributes.
     fn update_searchable(&mut self) -> anyhow::Result<bool> {
         match self.searchable_fields {
             Some(ref searchable_fields) => {
@@ -158,35 +165,21 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                         // ids for any settings that uses the facets. (displayed_fields,
                         // faceted_fields)
                         let old_fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-                        let old_primary_key = self.index
-                            .primary_key(self.wtxn)?
-                            .map(|id| old_fields_ids_map.name(id).expect("unexpected error when retrieving attribute name; corrupted data"));
-                        let old_displayed_names = self.index
-                            .displayed_fields(self.wtxn)?
-                            .map(|fields| fields
-                                .iter()
-                                .map(|f| old_fields_ids_map.name(*f)
-                                //At this point we need to crash, the data integrity is compromised
-                                .expect("unexpected error when retrieving attribute name; corrupted data"))
-                                .collect::<Vec<_>>());
-                        let old_facets: HashMap<_, _> = self.index
-                            .faceted_fields(self.wtxn)?
-                            .iter()
-                            .map(|(id, ty)| (old_fields_ids_map.name(*id).expect("unexpected error when retrieving attribute name; corrupted data"), *ty))
-                            .collect();
 
-                        let mut new_searchable = Vec::with_capacity(fields.len());
                         let mut new_fields_ids_map = FieldsIdsMap::new();
+                        // fields are deduplicated, only the first occurence is taken into account
+                        let names = fields
+                            .iter()
+                            .unique()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>();
 
                         // Add all the searchable attributes to the field map, and then add the
                         // remaining fields from the old field map to the new one
-                        for name in fields {
-                            let id = new_fields_ids_map
+                        for name in names.iter() {
+                            new_fields_ids_map
                                 .insert(&name)
                                 .context("field id limit exceeded")?;
-                            if !new_searchable.contains(&id) {
-                                new_searchable.push(id);
-                            }
                         }
 
                         for (_, name) in old_fields_ids_map.iter() {
@@ -195,29 +188,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                                 .context("field id limit exceeded")?;
                         }
 
-                        self.index.put_searchable_fields(self.wtxn, &new_searchable)?;
-
-                        // If there were displayed or faceted fields, restore them with the new ids.
-                        if let Some(old_displayed_names) = old_displayed_names {
-                            let new_displayed: Vec<_> = old_displayed_names
-                                .iter()
-                                .map(|name| new_fields_ids_map.id(name).unwrap())
-                                .collect();
-                            self.index.put_displayed_fields(self.wtxn, &new_displayed)?;
-                        }
-
-                        if let Some(old_primary_key) = old_primary_key {
-                            let new_primary_key = new_fields_ids_map
-                                .insert(old_primary_key)
-                                .context("field id limit exceeded")?;
-                            self.index.put_primary_key(self.wtxn, new_primary_key)?;
-                        }
-
-                        let new_facets = old_facets
-                            .iter()
-                            .map(|(name, ty)| (new_fields_ids_map.id(name).unwrap(), *ty))
-                            .collect();
-                        self.index.put_faceted_fields(self.wtxn, &new_facets)?;
+                        self.index.put_searchable_fields(self.wtxn, &names)?;
                         self.index.put_fields_ids_map(self.wtxn, &new_fields_ids_map)?;
                     }
                     None => { self.index.delete_searchable_fields(self.wtxn)?; },
@@ -225,7 +196,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 Ok(true)
             }
             None => Ok(false),
-        } 
+        }
     }
 
     fn update_facets(&mut self) -> anyhow::Result<bool> {
@@ -236,9 +207,9 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                         let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
                         let mut new_facets = HashMap::new();
                         for (name, ty) in fields {
-                            let id = fields_ids_map.insert(name).context("field id limit exceeded")?;
+                            fields_ids_map.insert(name).context("field id limit exceeded")?;
                             let ty = FacetType::from_str(&ty)?;
-                            new_facets.insert(id, ty);
+                            new_facets.insert(name.clone(), ty);
                         }
                         self.index.put_faceted_fields(self.wtxn, &new_facets)?;
                         self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
@@ -251,15 +222,19 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         }
     }
 
-    fn update_primary_key(&mut self) -> anyhow::Result<FieldId> {
+    fn update_primary_key(&mut self) -> anyhow::Result<String> {
         let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-        let primary_key_id = match self.index.primary_key(&self.wtxn)? {
-            Some(id) => id,
-            None => fields_ids_map.insert("id").context("field id limit reached")?,
+        let primary_key = match self.index.primary_key(&self.wtxn)? {
+            Some(name) => name.to_string(),
+            None => {
+                let name = "id".to_string();
+                fields_ids_map.insert("id").context("field id limit reached")?;
+                name
+            },
         };
         self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
 
-        Ok(primary_key_id)
+        Ok(primary_key)
     }
 
     fn update_criteria(&mut self) -> anyhow::Result<()> {
@@ -388,10 +363,8 @@ mod tests {
 
         // Check that the displayed fields are correctly set to `None` (default value).
         let rtxn = index.read_txn().unwrap();
-        let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
         let fields_ids = index.displayed_fields(&rtxn).unwrap();
-        let age_id = fields_ids_map.id("age").unwrap();
-        assert_eq!(fields_ids, Some(&[age_id][..]));
+        assert_eq!(fields_ids.unwrap(), (&["age"][..]));
         drop(rtxn);
 
         // We change the searchable fields to be the "name" field only.
@@ -403,10 +376,8 @@ mod tests {
 
         // Check that the displayed fields always contains only the "age" field.
         let rtxn = index.read_txn().unwrap();
-        let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
         let fields_ids = index.displayed_fields(&rtxn).unwrap();
-        let age_id = fields_ids_map.id("age").unwrap();
-        assert_eq!(fields_ids, Some(&[age_id][..]));
+        assert_eq!(fields_ids.unwrap(), &["age"][..]);
         drop(rtxn);
     }
 
@@ -454,10 +425,8 @@ mod tests {
 
         // Check that the displayed fields are correctly set to only the "age" field.
         let rtxn = index.read_txn().unwrap();
-        let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
-        let age_field_id = fields_ids_map.id("age").unwrap();
         let fields_ids = index.displayed_fields(&rtxn).unwrap();
-        assert_eq!(fields_ids.unwrap(), &[age_field_id][..]);
+        assert_eq!(fields_ids.unwrap(), &["age"][..]);
         drop(rtxn);
 
         // We reset the fields ids to become `None`, the default value.
@@ -497,7 +466,7 @@ mod tests {
         // Check that the displayed fields are correctly set.
         let rtxn = index.read_txn().unwrap();
         let fields_ids = index.faceted_fields(&rtxn).unwrap();
-        assert_eq!(fields_ids, hashmap!{ 1 => FacetType::Integer });
+        assert_eq!(fields_ids, hashmap!{ "age".to_string() => FacetType::Integer });
         // Only count the field_id 0 and level 0 facet values.
         let count = index.facet_field_id_value_docids.prefix_iter(&rtxn, &[1, 0]).unwrap().count();
         assert_eq!(count, 3);
@@ -536,8 +505,8 @@ mod tests {
 
         // check the output
         let rtxn = index.read_txn().unwrap();
-        assert_eq!([0], index.displayed_fields(&rtxn).unwrap().unwrap());
-        assert_eq!(2, index.primary_key(&rtxn).unwrap().unwrap());
+        assert_eq!(&["hello"][..], index.displayed_fields(&rtxn).unwrap().unwrap());
+        assert_eq!("id", index.primary_key(&rtxn).unwrap().unwrap());
         assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
         assert_eq!(
             r##"FieldsIdsMap { names_ids: {"age": 3, "hello": 0, "id": 2, "toto": 1}, ids_names: {0: "hello", 1: "toto", 2: "id", 3: "age"}, next_id: Some(4) }"##,
@@ -553,8 +522,8 @@ mod tests {
         wtxn.commit().unwrap();
 
         let rtxn = index.read_txn().unwrap();
-        assert_eq!([2], index.displayed_fields(&rtxn).unwrap().unwrap());
-        assert_eq!(2, index.primary_key(&rtxn).unwrap().unwrap());
+        assert_eq!(&["hello"][..], index.displayed_fields(&rtxn).unwrap().unwrap());
+        assert_eq!("id", index.primary_key(&rtxn).unwrap().unwrap());
         assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
         assert_eq!(
             r##"FieldsIdsMap { names_ids: {"age": 1, "hello": 2, "id": 3, "toto": 0}, ids_names: {0: "toto", 1: "age", 2: "hello", 3: "id"}, next_id: Some(4) }"##,

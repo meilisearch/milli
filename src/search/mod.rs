@@ -286,7 +286,7 @@ impl<'a> Search<'a> {
             }).next();
             match result {
                 Some((fid, is_ascending)) => {
-                    let faceted_fields = self.index.faceted_fields(self.rtxn)?;
+                    let faceted_fields = self.index.faceted_fields_ids(self.rtxn)?;
                     let ftype = *faceted_fields.get(&fid).context("unknown field id")?;
                     Some((fid, ftype, is_ascending))
                 },

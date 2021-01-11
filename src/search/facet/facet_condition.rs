@@ -148,7 +148,7 @@ impl FacetCondition {
     ) -> anyhow::Result<FacetCondition>
     {
         let fields_ids_map = index.fields_ids_map(rtxn)?;
-        let faceted_fields = index.faceted_fields(rtxn)?;
+        let faceted_fields = index.faceted_fields_ids(rtxn)?;
         let lexed = FilterParser::parse(Rule::prgm, expression)?;
         FacetCondition::from_pairs(&fields_ids_map, &faceted_fields, lexed)
     }

@@ -10,13 +10,13 @@ use log::info;
 use roaring::RoaringBitmap;
 use serde_json::{Map, Value};
 
-use crate::{BEU32, MergeFn, Index, FieldId, FieldsIdsMap, ExternalDocumentsIds};
+use crate::{BEU32, MergeFn, Index, FieldsIdsMap, ExternalDocumentsIds};
 use crate::update::{AvailableDocumentsIds, UpdateIndexingStep};
 use super::merge_function::merge_two_obkvs;
 use super::{create_writer, create_sorter, IndexDocumentsMethod};
 
 pub struct TransformOutput {
-    pub primary_key: FieldId,
+    pub primary_key: String,
     pub fields_ids_map: FieldsIdsMap,
     pub external_documents_ids: ExternalDocumentsIds<'static>,
     pub new_documents_ids: RoaringBitmap,
@@ -73,7 +73,6 @@ impl Transform<'_, '_> {
     {
         let mut fields_ids_map = self.index.fields_ids_map(self.rtxn)?;
         let external_documents_ids = self.index.external_documents_ids(self.rtxn).unwrap();
-        let primary_key = self.index.primary_key(self.rtxn)?;
 
         // Deserialize the whole batch of documents in memory.
         let mut documents: Peekable<Box<dyn Iterator<Item=serde_json::Result<Map<String, Value>>>>> = if is_stream {
@@ -88,25 +87,30 @@ impl Transform<'_, '_> {
         };
 
         // We extract the primary key from the first document in
-        // the batch if it hasn't already been defined in the index.
-        let primary_key = match primary_key {
-            Some(primary_key) => primary_key,
+        // the batch if it hasn't already been defined in the index
+        let (primary_key_id, primary_key) = match self.index.primary_key(self.rtxn)? {
+            Some(primary_key) => {
+                let id = fields_ids_map.id(primary_key).expect("primary key must be present in the fields id map");
+                (id, primary_key.to_string())
+            }
             None => {
                 // We ignore a potential error here as we can't early return it now,
                 // the peek method gives us only a reference on the next item,
                 // we will eventually return it in the iteration just after.
                 let first = documents.peek().and_then(|r| r.as_ref().ok());
-                match first.and_then(|doc| doc.keys().find(|k| k.contains("id"))) {
-                    Some(key) => fields_ids_map.insert(&key).context("field id limit reached")?,
+                let name = match first.and_then(|doc| doc.keys().find(|k| k.contains("id"))) {
+                    Some(key) => key.to_string(),
                     None => {
                         if !self.autogenerate_docids {
                             // If there is no primary key in the current document batch, we must
                             // return an error and not automatically generate any document id.
                             return Err(anyhow!("missing primary key"))
                         }
-                        fields_ids_map.insert("id").context("field id limit reached")?
+                        "id".to_string()
                     },
-                }
+                };
+                let id = fields_ids_map.insert("id").context("field id limit reached")?;
+                (id, name)
             },
         };
 
@@ -121,13 +125,6 @@ impl Transform<'_, '_> {
                 documents_file: tempfile::tempfile()?,
             });
         }
-
-        // Get the primary key field name now, this way we will
-        // be able to get the value in the JSON Map document.
-        let primary_key_name = fields_ids_map
-            .name(primary_key)
-            .expect("found the primary key name")
-            .to_owned();
 
         // We must choose the appropriate merge function for when two or more documents
         // with the same user id must be merged or fully replaced in the same batch.
@@ -170,7 +167,7 @@ impl Transform<'_, '_> {
 
             // We retrieve the user id from the document based on the primary key name,
             // if the document id isn't present we generate a uuid.
-            let external_id = match document.get(&primary_key_name) {
+            let external_id = match document.get(&primary_key) {
                 Some(value) => match value {
                     Value::String(string) => Cow::Borrowed(string.as_str()),
                     Value::Number(number) => Cow::Owned(number.to_string()),
@@ -196,7 +193,7 @@ impl Transform<'_, '_> {
                     serde_json::to_writer(&mut json_buffer, value)?;
                     writer.insert(field_id, &json_buffer)?;
                 }
-                else if field_id == primary_key {
+                else if field_id == primary_key_id {
                     // We validate the document id [a-zA-Z0-9\-_].
                     let external_id = match validate_document_id(&external_id) {
                         Some(valid) => valid,
@@ -240,7 +237,6 @@ impl Transform<'_, '_> {
 
         let mut csv = csv::Reader::from_reader(reader);
         let headers = csv.headers()?;
-        let primary_key = self.index.primary_key(self.rtxn)?;
 
         // Generate the new fields ids based on the current fields ids and this CSV headers.
         let mut fields_ids = Vec::new();
@@ -250,11 +246,10 @@ impl Transform<'_, '_> {
         }
 
         // Extract the position of the primary key in the current headers, None if not found.
-        let external_id_pos = match primary_key {
+        let external_id_pos = match self.index.primary_key(self.rtxn)? {
             Some(primary_key) => {
                 // Te primary key have is known so we must find the position in the CSV headers.
-                let name = fields_ids_map.name(primary_key).expect("found the primary key name");
-                headers.iter().position(|h| h == name)
+                headers.iter().position(|h| h == primary_key)
             },
             None => headers.iter().position(|h| h.contains("id")),
         };
@@ -349,9 +344,13 @@ impl Transform<'_, '_> {
 
         // Now that we have a valid sorter that contains the user id and the obkv we
         // give it to the last transforming function which returns the TransformOutput.
+        let primary_key_name = fields_ids_map
+            .name(primary_key_field_id)
+            .map(String::from)
+            .expect("Primary key must be present in field_id map");
         self.output_from_sorter(
             sorter,
-            primary_key_field_id,
+            primary_key_name,
             fields_ids_map,
             documents_count,
             external_documents_ids,
@@ -365,7 +364,7 @@ impl Transform<'_, '_> {
     fn output_from_sorter<F>(
         self,
         sorter: grenad::Sorter<MergeFn>,
-        primary_key: FieldId,
+        primary_key: String,
         fields_ids_map: FieldsIdsMap,
         approximate_number_of_documents: usize,
         mut external_documents_ids: ExternalDocumentsIds<'_>,
@@ -477,7 +476,7 @@ impl Transform<'_, '_> {
     // TODO this can be done in parallel by using the rayon `ThreadPool`.
     pub fn remap_index_documents(
         self,
-        primary_key: FieldId,
+        primary_key: String,
         fields_ids_map: FieldsIdsMap,
     ) -> anyhow::Result<TransformOutput>
     {
