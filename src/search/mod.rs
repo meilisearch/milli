@@ -69,6 +69,7 @@ impl<'a> Search<'a> {
     fn generate_query_dfas(query: &str) -> Vec<(String, bool, DFA)> {
         let (lev0, lev1, lev2) = (&LEVDIST0, &LEVDIST1, &LEVDIST2);
 
+        let before = Instant::now();
         let stop_words = Set::default();
         let analyzer = Analyzer::new(AnalyzerConfig::default_with_stopwords(&stop_words));
         let analyzed = analyzer.analyze(query);
@@ -78,7 +79,7 @@ impl<'a> Search<'a> {
         let ends_with_whitespace = query.chars().last().map_or(false, char::is_whitespace);
         let number_of_words = words.len();
 
-        words.into_iter().enumerate().map(|(i, word)| {
+        let dfas: Vec<_> = words.into_iter().enumerate().map(|(i, word)| {
             let (word, quoted) = match word {
                 QueryToken::Free(token) => (token.text().to_string(), token.text().len() <= 3),
                 QueryToken::Quoted(token) => (token.text().to_string(), true),
@@ -99,7 +100,11 @@ impl<'a> Search<'a> {
 
             (word, is_prefix, dfa)
         })
-        .collect()
+        .collect();
+
+        debug!("generating the {} dfas took {:.02?}", dfas.len(), before.elapsed());
+
+        dfas
     }
 
     /// Fetch the words from the given FST related to the given DFAs along with
@@ -114,6 +119,9 @@ impl<'a> Search<'a> {
         // with the distance from the original word and the docids where the words appears.
         let mut derived_words = Vec::<(HashMap::<String, (u8, RoaringBitmap)>, RoaringBitmap)>::with_capacity(dfas.len());
 
+        let before = Instant::now();
+        let mut total_number_of_words = 0;
+
         for (_word, _is_prefix, dfa) in dfas {
 
             let mut acc_derived_words = HashMap::new();
@@ -126,9 +134,12 @@ impl<'a> Search<'a> {
                 let distance = dfa.distance(state);
                 unions_docids.union_with(&docids);
                 acc_derived_words.insert(word.to_string(), (distance.to_u8(), docids));
+                total_number_of_words += 1;
             }
             derived_words.push((acc_derived_words, unions_docids));
         }
+
+        debug!("fetching {} words using the dfas took {:.02?}", total_number_of_words, before.elapsed());
 
         Ok(derived_words)
     }
