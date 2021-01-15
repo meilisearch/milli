@@ -5,6 +5,7 @@ mod external_documents_ids;
 mod fields_ids_map;
 mod index;
 mod mdfs;
+mod multi_automaton;
 mod query_tokens;
 mod search;
 mod update_store;

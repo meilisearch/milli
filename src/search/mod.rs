@@ -17,6 +17,7 @@ use crate::facet::FacetType;
 use crate::heed_codec::facet::{FacetLevelValueF64Codec, FacetLevelValueI64Codec};
 use crate::heed_codec::facet::{FieldDocIdFacetF64Codec, FieldDocIdFacetI64Codec};
 use crate::mdfs::Mdfs;
+use crate::multi_automaton::MultiAutomaton;
 use crate::query_tokens::{query_tokens, QueryToken};
 use crate::{Index, FieldId, DocumentId, Criterion};
 
@@ -115,28 +116,33 @@ impl<'a> Search<'a> {
         dfas: Vec<(String, bool, DFA)>,
     ) -> anyhow::Result<Vec<(HashMap<String, (u8, RoaringBitmap)>, RoaringBitmap)>>
     {
-        // A Vec storing all the derived words from the original query words, associated
-        // with the distance from the original word and the docids where the words appears.
-        let mut derived_words = Vec::<(HashMap::<String, (u8, RoaringBitmap)>, RoaringBitmap)>::with_capacity(dfas.len());
 
         let before = Instant::now();
+        let number_of_dfas = dfas.len();
         let mut total_number_of_words = 0;
 
-        for (_word, _is_prefix, dfa) in dfas {
+        let automaton: MultiAutomaton<_> = dfas.iter().map(|(_, _, dfa)| dfa).collect();
 
-            let mut acc_derived_words = HashMap::new();
-            let mut unions_docids = RoaringBitmap::new();
-            let mut stream = fst.search_with_state(&dfa).into_stream();
-            while let Some((word, state)) = stream.next() {
+        // A Vec storing all the derived words from the original query words, associated
+        // with the distance from the original word and the docids where the words appears.
+        let mut derived_words: Vec<(HashMap::<String, (u8, RoaringBitmap)>, RoaringBitmap)> = vec![Default::default(); number_of_dfas];
 
-                let word = std::str::from_utf8(word)?;
+        let mut stream = fst.search_with_state(&automaton).into_stream();
+        while let Some((word, state)) = stream.next() {
+
+            let word = std::str::from_utf8(word)?;
+            for index in automaton.matchings(&state) {
+
+                let (words, unions_docids) = &mut derived_words[index];
+                let (_, _, dfa) = &dfas[index];
+
+                // fetching instead of cloning, reduces the number of times we clone.
                 let docids = self.index.word_docids.get(self.rtxn, word)?.unwrap();
-                let distance = dfa.distance(state);
+                let distance = dfa.eval(word).to_u8(); // can be costy
                 unions_docids.union_with(&docids);
-                acc_derived_words.insert(word.to_string(), (distance.to_u8(), docids));
+                words.insert(word.to_string(), (distance, docids));
                 total_number_of_words += 1;
             }
-            derived_words.push((acc_derived_words, unions_docids));
         }
 
         debug!("fetching {} words using the dfas took {:.02?}", total_number_of_words, before.elapsed());
