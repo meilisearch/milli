@@ -84,12 +84,17 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.criteria = Some(Some(criteria));
     }
 
-    fn reindex<F>(&mut self, cb: &F, primary_key: String) -> anyhow::Result<()>
+    fn reindex<F>(&mut self, cb: &F, old_fields_ids_map: FieldsIdsMap) -> anyhow::Result<()>
     where
         F: Fn(UpdateIndexingStep) + Sync
 
-    {
-        let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+        {
+            let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+            // if the settings are set before any document update, we don't need to do anything, and
+            // will set the primary key during the first document addition.
+            if self.index.number_of_documents(&self.wtxn)? == 0 {
+                return Ok(())
+            }
 
             let transform = Transform {
                 rtxn: &self.wtxn,
@@ -104,8 +109,14 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 autogenerate_docids: false,
             };
 
+            // There already has been a document addition, the primary key should be set by now.
+            let primary_key = self.index.primary_key(&self.wtxn)?.context("Index must have a primary key")?;
+
             // We remap the documents fields based on the new `FieldsIdsMap`.
-            let output = transform.remap_index_documents(primary_key, fields_ids_map.clone())?;
+            let output = transform.remap_index_documents(
+                primary_key.to_string(),
+                old_fields_ids_map,
+                fields_ids_map.clone())?;
 
             // We clear the full database (words-fst, documents ids and documents content).
             ClearDocuments::new(self.wtxn, self.index).execute()?;
@@ -123,7 +134,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             indexing_builder.thread_pool = self.thread_pool;
             indexing_builder.execute_raw(output, &cb)?;
             Ok(())
-    }
+        }
 
     fn update_displayed(&mut self) -> anyhow::Result<bool> {
         match self.displayed_fields {
@@ -142,7 +153,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                             fields_ids_map
                                 .insert(name)
                                 .context("field id limit exceeded")?;
-                        }
+                            }
                         self.index.put_displayed_fields(self.wtxn, &names)?;
                         self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
                     }
@@ -180,13 +191,13 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                             new_fields_ids_map
                                 .insert(&name)
                                 .context("field id limit exceeded")?;
-                        }
+                            }
 
                         for (_, name) in old_fields_ids_map.iter() {
                             new_fields_ids_map
                                 .insert(&name)
                                 .context("field id limit exceeded")?;
-                        }
+                            }
 
                         self.index.put_searchable_fields(self.wtxn, &names)?;
                         self.index.put_fields_ids_map(self.wtxn, &new_fields_ids_map)?;
@@ -222,21 +233,6 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         }
     }
 
-    fn update_primary_key(&mut self) -> anyhow::Result<String> {
-        let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-        let primary_key = match self.index.primary_key(&self.wtxn)? {
-            Some(name) => name.to_string(),
-            None => {
-                let name = "id".to_string();
-                fields_ids_map.insert(&name).context("field id limit reached")?;
-                name
-            },
-        };
-        self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
-
-        Ok(primary_key)
-    }
-
     fn update_criteria(&mut self) -> anyhow::Result<()> {
         if let Some(ref criteria) = self.criteria {
             match criteria {
@@ -258,20 +254,20 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
     pub fn execute<F>(mut self, progress_callback: F) -> anyhow::Result<()>
     where
         F: Fn(UpdateIndexingStep) + Sync
-    {
-        self.update_displayed()?;
-        let primary_key = self.update_primary_key()?;
-        let facets_updated = self.update_facets()?;
-        // update_criteria MUST be called after update_facets, since criterion fields must be set
-        // as facets.
-        self.update_criteria()?;
-        let searchable_updated = self.update_searchable()?;
+        {
+            let old_fields_ids_map = self.index.fields_ids_map(&self.wtxn)?;
+            self.update_displayed()?;
+            let facets_updated = self.update_facets()?;
+            // update_criteria MUST be called after update_facets, since criterion fields must be set
+            // as facets.
+            self.update_criteria()?;
+            let searchable_updated = self.update_searchable()?;
 
-        if facets_updated | searchable_updated {
-            self.reindex(&progress_callback, primary_key)?;
+            if facets_updated | searchable_updated {
+                self.reindex(&progress_callback, old_fields_ids_map)?;
+            }
+            Ok(())
         }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

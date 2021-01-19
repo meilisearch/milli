@@ -10,7 +10,7 @@ use log::info;
 use roaring::RoaringBitmap;
 use serde_json::{Map, Value};
 
-use crate::{BEU32, MergeFn, Index, FieldsIdsMap, ExternalDocumentsIds};
+use crate::{BEU32, MergeFn, Index, FieldsIdsMap, ExternalDocumentsIds, FieldId};
 use crate::update::{AvailableDocumentsIds, UpdateIndexingStep};
 use super::merge_function::merge_two_obkvs;
 use super::{create_writer, create_sorter, IndexDocumentsMethod};
@@ -88,31 +88,9 @@ impl Transform<'_, '_> {
 
         // We extract the primary key from the first document in
         // the batch if it hasn't already been defined in the index
-        let (primary_key_id, primary_key) = match self.index.primary_key(self.rtxn)? {
-            Some(primary_key) => {
-                let id = fields_ids_map.id(primary_key).expect("primary key must be present in the fields id map");
-                (id, primary_key.to_string())
-            }
-            None => {
-                // We ignore a potential error here as we can't early return it now,
-                // the peek method gives us only a reference on the next item,
-                // we will eventually return it in the iteration just after.
-                let first = documents.peek().and_then(|r| r.as_ref().ok());
-                let name = match first.and_then(|doc| doc.keys().find(|k| k.contains("id"))) {
-                    Some(key) => key.to_string(),
-                    None => {
-                        if !self.autogenerate_docids {
-                            // If there is no primary key in the current document batch, we must
-                            // return an error and not automatically generate any document id.
-                            return Err(anyhow!("missing primary key"))
-                        }
-                        "id".to_string()
-                    },
-                };
-                let id = fields_ids_map.insert(&name).context("field id limit reached")?;
-                (id, name)
-            },
-        };
+        let first = documents.peek().and_then(|r| r.as_ref().ok());
+        let alternative_name = first.and_then(|doc| doc.keys().find(|k| k.contains("id")).cloned());
+        let (primary_key_id, primary_key) = self.get_primary_key(&mut fields_ids_map, alternative_name)?;
 
         if documents.peek().is_none() {
             return Ok(TransformOutput {
@@ -256,21 +234,8 @@ impl Transform<'_, '_> {
 
         // Returns the field id in the fileds ids map, create an "id" field
         // in case it is not in the current headers.
-        let primary_key_field_id = match external_id_pos {
-            Some(pos) => fields_ids_map.id(&headers[pos]).expect("found the primary key"),
-            None => {
-                if !self.autogenerate_docids {
-                    // If there is no primary key in the current document batch, we must
-                    // return an error and not automatically generate any document id.
-                    return Err(anyhow!("missing primary key"))
-                }
-                let field_id = fields_ids_map.insert("id").context("field id limit reached")?;
-                // We make sure to add the primary key field id to the fields ids,
-                // this way it is added to the obks.
-                fields_ids.push((field_id, usize::max_value()));
-                field_id
-            },
-        };
+        let alternative_name = external_id_pos.map(|pos| headers[pos].to_string());
+        let (primary_key_id, _) = self.get_primary_key(&mut fields_ids_map, alternative_name)?;
 
         // We sort the fields ids by the fields ids map id, this way we are sure to iterate over
         // the records fields in the fields ids map order and correctly generate the obkv.
@@ -321,7 +286,7 @@ impl Transform<'_, '_> {
             // we return the generated document id instead of the record field.
             let iter = fields_ids.iter()
                 .map(|(fi, i)| {
-                    let field = if *fi == primary_key_field_id { external_id } else { &record[*i] };
+                    let field = if *fi == primary_key_id { external_id } else { &record[*i] };
                     (fi, field)
                 });
 
@@ -345,7 +310,7 @@ impl Transform<'_, '_> {
         // Now that we have a valid sorter that contains the user id and the obkv we
         // give it to the last transforming function which returns the TransformOutput.
         let primary_key_name = fields_ids_map
-            .name(primary_key_field_id)
+            .name(primary_key_id)
             .map(String::from)
             .expect("Primary key must be present in field_id map");
         self.output_from_sorter(
@@ -477,10 +442,10 @@ impl Transform<'_, '_> {
     pub fn remap_index_documents(
         self,
         primary_key: String,
-        fields_ids_map: FieldsIdsMap,
+        old_fields_ids_map: FieldsIdsMap,
+        new_fields_ids_map: FieldsIdsMap,
     ) -> anyhow::Result<TransformOutput>
     {
-        let current_fields_ids_map = self.index.fields_ids_map(self.rtxn)?;
         let external_documents_ids = self.index.external_documents_ids(self.rtxn)?;
         let documents_ids = self.index.documents_ids(self.rtxn)?;
         let documents_count = documents_ids.len() as usize;
@@ -498,8 +463,8 @@ impl Transform<'_, '_> {
             let mut obkv_writer = obkv::KvWriter::new(&mut obkv_buffer);
 
             // We iterate over the new `FieldsIdsMap` ids in order and construct the new obkv.
-            for (id, name) in fields_ids_map.iter() {
-                if let Some(val) = current_fields_ids_map.id(name).and_then(|id| obkv.get(id)) {
+            for (id, name) in new_fields_ids_map.iter() {
+                if let Some(val) = old_fields_ids_map.id(name).and_then(|id| obkv.get(id)) {
                     obkv_writer.insert(id, val)?;
                 }
             }
@@ -515,13 +480,41 @@ impl Transform<'_, '_> {
 
         Ok(TransformOutput {
             primary_key,
-            fields_ids_map,
+            fields_ids_map: new_fields_ids_map,
             external_documents_ids: external_documents_ids.into_static(),
             new_documents_ids: documents_ids,
             replaced_documents_ids: RoaringBitmap::default(),
             documents_count,
             documents_file,
         })
+    }
+
+    /// Attempts to retrieve the primary key from the index. If it is not present already, the
+    /// `alternative_name` will be set as primary key, and if the later is not present either, the
+    /// primary key will be set to id.
+    fn get_primary_key(&self, fields_ids_map: &mut FieldsIdsMap, alternative_name: Option<String> ) -> anyhow::Result<(FieldId, String)> {
+        const DEFAULT_PRIMARY_KEY_NAME: &str = "id";
+        match self.index.primary_key(self.rtxn)? {
+            Some(primary_key) => {
+                let id = fields_ids_map.id(primary_key).expect("primary key must be present in the fields id map");
+                Ok((id, primary_key.to_string()))
+            }
+            None => {
+                let name = match alternative_name {
+                    Some(key) => key.to_string(),
+                    None => {
+                        if !self.autogenerate_docids {
+                            // If there is no primary key in the current document batch, we must
+                            // return an error and not automatically generate any document id.
+                            return Err(anyhow!("missing primary key"))
+                        }
+                        DEFAULT_PRIMARY_KEY_NAME.to_string()
+                    },
+                };
+                let id = fields_ids_map.insert(&name).context("field id limit reached")?;
+                Ok((id, name))
+            },
+        }
     }
 }
 
@@ -551,3 +544,4 @@ fn validate_document_id(document_id: &str) -> Option<&str> {
         })
     })
 }
+
