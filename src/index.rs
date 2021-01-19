@@ -212,7 +212,7 @@ impl Index {
     }
 
     /// Identical to `searchable_fields`, but returns the ids instead.
-    pub fn searchable_fields_ids<'t>(&self, rtxn: &'t RoTxn) -> heed::Result<Option<Vec<u8>>> {
+    pub fn searchable_fields_ids(&self, rtxn: &RoTxn) -> heed::Result<Option<Vec<u8>>> {
         match self.searchable_fields(rtxn)? {
             Some(names) => {
                 let fields_map = self.fields_ids_map(rtxn)?;
@@ -225,7 +225,6 @@ impl Index {
                     ids.push(id);
                 }
                 Ok(Some(ids))
-
             }
             None => Ok(None),
         }
@@ -262,7 +261,7 @@ impl Index {
                     .expect("corrupted data: ");
                 (kid, *v)
             })
-        .collect();
+            .collect();
         Ok(faceted_fields)
     }
 

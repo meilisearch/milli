@@ -228,7 +228,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             Some(name) => name.to_string(),
             None => {
                 let name = "id".to_string();
-                fields_ids_map.insert("id").context("field id limit reached")?;
+                fields_ids_map.insert(&name).context("field id limit reached")?;
                 name
             },
         };
@@ -241,14 +241,13 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         if let Some(ref criteria) = self.criteria {
             match criteria {
                 Some(fields) => {
-                    let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+                    let faceted_fields = self.index.faceted_fields(&self.wtxn)?;
                     let mut new_criteria = Vec::new();
                     for name in fields {
-                        let criterion = Criterion::from_str(&mut fields_ids_map, &name)?;
+                        let criterion = Criterion::from_str(&faceted_fields, &name)?;
                         new_criteria.push(criterion);
                     }
                     self.index.put_criteria(self.wtxn, &new_criteria)?;
-                    self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
                 }
                 None => { self.index.delete_criteria(self.wtxn)?; }
             }
@@ -261,11 +260,14 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         F: Fn(UpdateIndexingStep) + Sync
     {
         self.update_displayed()?;
-        self.update_criteria()?;
         let primary_key = self.update_primary_key()?;
+        let facets_updated = self.update_facets()?;
+        // update_criteria MUST be called after update_facets, since criterion fields must be set
+        // as facets.
+        self.update_criteria()?;
+        let searchable_updated = self.update_searchable()?;
 
-        // Use of eager operator | so both operand are evaluated unconditionally
-        if self.update_facets()? | self.update_searchable()? {
+        if facets_updated | searchable_updated {
             self.reindex(&progress_callback, primary_key)?;
         }
         Ok(())
@@ -498,7 +500,10 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index);
         builder.set_displayed_fields(vec!["hello".to_string()]);
-        builder.set_faceted_fields(hashmap!{ "age".into() => "integer".into() });
+        builder.set_faceted_fields(hashmap!{
+            "age".into() => "integer".into(),
+            "toto".into() => "integer".into(),
+        });
         builder.set_criteria(vec!["asc(toto)".to_string()]);
         builder.execute(|_| ()).unwrap();
         wtxn.commit().unwrap();
@@ -507,11 +512,7 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
         assert_eq!(&["hello"][..], index.displayed_fields(&rtxn).unwrap().unwrap());
         assert_eq!("id", index.primary_key(&rtxn).unwrap().unwrap());
-        assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
-        assert_eq!(
-            r##"FieldsIdsMap { names_ids: {"age": 3, "hello": 0, "id": 2, "toto": 1}, ids_names: {0: "hello", 1: "toto", 2: "id", 3: "age"}, next_id: Some(4) }"##,
-            format!("{:?}", index.fields_ids_map(&rtxn).unwrap())
-        );
+        assert_eq!("[Asc(\"toto\")]", format!("{:?}", index.criteria(&rtxn).unwrap()));
         drop(rtxn);
 
         // We set toto and age as searchable to force reordering of the fields
@@ -524,11 +525,7 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
         assert_eq!(&["hello"][..], index.displayed_fields(&rtxn).unwrap().unwrap());
         assert_eq!("id", index.primary_key(&rtxn).unwrap().unwrap());
-        assert_eq!("[Asc(1)]", format!("{:?}", index.criteria(&rtxn).unwrap()));
-        assert_eq!(
-            r##"FieldsIdsMap { names_ids: {"age": 1, "hello": 2, "id": 3, "toto": 0}, ids_names: {0: "toto", 1: "age", 2: "hello", 3: "id"}, next_id: Some(4) }"##,
-            format!("{:?}", index.fields_ids_map(&rtxn).unwrap())
-        );
+        assert_eq!("[Asc(\"toto\")]", format!("{:?}", index.criteria(&rtxn).unwrap()));
         drop(rtxn);
     }
 }

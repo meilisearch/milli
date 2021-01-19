@@ -109,7 +109,7 @@ impl Transform<'_, '_> {
                         "id".to_string()
                     },
                 };
-                let id = fields_ids_map.insert("id").context("field id limit reached")?;
+                let id = fields_ids_map.insert(&name).context("field id limit reached")?;
                 (id, name)
             },
         };
