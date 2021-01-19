@@ -18,8 +18,6 @@ use ordered_float::OrderedFloat;
 use roaring::RoaringBitmap;
 use serde_json::Value;
 use tempfile::tempfile;
-use meilisearch_tokenizer::{Analyzer, AnalyzerConfig};
-use fst::Set;
 
 use crate::facet::FacetType;
 use crate::heed_codec::facet::{FacetValueStringCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec};

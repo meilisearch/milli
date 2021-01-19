@@ -94,54 +94,55 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
     where
         F: Fn(UpdateIndexingStep, u64) + Sync
     {
-
-        {
-            let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-            // if the settings are set before any document update, we don't need to do anything, and
-            // will set the primary key during the first document addition.
-            if self.index.number_of_documents(&self.wtxn)? == 0 {
-                return Ok(())
-            }
-
-            let transform = Transform {
-                rtxn: &self.wtxn,
-                index: self.index,
-                log_every_n: self.log_every_n,
-                chunk_compression_type: self.chunk_compression_type,
-                chunk_compression_level: self.chunk_compression_level,
-                chunk_fusing_shrink_size: self.chunk_fusing_shrink_size,
-                max_nb_chunks: self.max_nb_chunks,
-                max_memory: self.max_memory,
-                index_documents_method: IndexDocumentsMethod::ReplaceDocuments,
-                autogenerate_docids: false,
-            };
-
-            // There already has been a document addition, the primary key should be set by now.
-            let primary_key = self.index.primary_key(&self.wtxn)?.context("Index must have a primary key")?;
-
-            // We remap the documents fields based on the new `FieldsIdsMap`.
-            let output = transform.remap_index_documents(
-                primary_key.to_string(),
-                old_fields_ids_map,
-                fields_ids_map.clone())?;
-
-            // We clear the full database (words-fst, documents ids and documents content).
-            ClearDocuments::new(self.wtxn, self.index, self.update_id).execute()?;
-
-            // We index the generated `TransformOutput` which must contain
-            // all the documents with fields in the newly defined searchable order.
-            let mut indexing_builder = IndexDocuments::new(self.wtxn, self.index, self.update_id);
-            indexing_builder.log_every_n = self.log_every_n;
-            indexing_builder.max_nb_chunks = self.max_nb_chunks;
-            indexing_builder.max_memory = self.max_memory;
-            indexing_builder.linked_hash_map_size = self.linked_hash_map_size;
-            indexing_builder.chunk_compression_type = self.chunk_compression_type;
-            indexing_builder.chunk_compression_level = self.chunk_compression_level;
-            indexing_builder.chunk_fusing_shrink_size = self.chunk_fusing_shrink_size;
-            indexing_builder.thread_pool = self.thread_pool;
-            indexing_builder.execute_raw(output, &cb)?;
-            Ok(())
+        let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
+        // if the settings are set before any document update, we don't need to do anything, and
+        // will set the primary key during the first document addition.
+        if self.index.number_of_documents(&self.wtxn)? == 0 {
+            return Ok(())
         }
+
+        let update_id = self.update_id;
+        let cb = |step| cb(step, update_id);
+
+        let transform = Transform {
+            rtxn: &self.wtxn,
+            index: self.index,
+            log_every_n: self.log_every_n,
+            chunk_compression_type: self.chunk_compression_type,
+            chunk_compression_level: self.chunk_compression_level,
+            chunk_fusing_shrink_size: self.chunk_fusing_shrink_size,
+            max_nb_chunks: self.max_nb_chunks,
+            max_memory: self.max_memory,
+            index_documents_method: IndexDocumentsMethod::ReplaceDocuments,
+            autogenerate_docids: false,
+        };
+
+        // There already has been a document addition, the primary key should be set by now.
+        let primary_key = self.index.primary_key(&self.wtxn)?.context("Index must have a primary key")?;
+
+        // We remap the documents fields based on the new `FieldsIdsMap`.
+        let output = transform.remap_index_documents(
+            primary_key.to_string(),
+            old_fields_ids_map,
+            fields_ids_map.clone())?;
+
+        // We clear the full database (words-fst, documents ids and documents content).
+        ClearDocuments::new(self.wtxn, self.index, self.update_id).execute()?;
+
+        // We index the generated `TransformOutput` which must contain
+        // all the documents with fields in the newly defined searchable order.
+        let mut indexing_builder = IndexDocuments::new(self.wtxn, self.index, self.update_id);
+        indexing_builder.log_every_n = self.log_every_n;
+        indexing_builder.max_nb_chunks = self.max_nb_chunks;
+        indexing_builder.max_memory = self.max_memory;
+        indexing_builder.linked_hash_map_size = self.linked_hash_map_size;
+        indexing_builder.chunk_compression_type = self.chunk_compression_type;
+        indexing_builder.chunk_compression_level = self.chunk_compression_level;
+        indexing_builder.chunk_fusing_shrink_size = self.chunk_fusing_shrink_size;
+        indexing_builder.thread_pool = self.thread_pool;
+        indexing_builder.execute_raw(output, &cb)?;
+        Ok(())
+    }
 
     fn update_displayed(&mut self) -> anyhow::Result<bool> {
         match self.displayed_fields {
@@ -260,7 +261,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 
     pub fn execute<F>(mut self, progress_callback: F) -> anyhow::Result<()>
     where
-        F: Fn(UpdateIndexingStep) + Sync
+        F: Fn(UpdateIndexingStep, u64) + Sync
         {
             let old_fields_ids_map = self.index.fields_ids_map(&self.wtxn)?;
             self.update_displayed()?;
@@ -284,7 +285,6 @@ mod tests {
     use maplit::hashmap;
 
     use crate::facet::FacetType;
-    use crate::update::{IndexDocuments, UpdateFormat};
 
     #[test]
     fn set_and_reset_searchable_fields() {
@@ -407,23 +407,20 @@ mod tests {
     #[test]
     fn set_displayed_fields_empty_db() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(size)).unwrap();
 
         {
             let mut wtxn = index.write_txn().unwrap();
-            let mut builder = Settings::new(&mut wtxn, &index);
+            let mut builder = Settings::new(&mut wtxn, &index, 0);
             builder.set_displayed_fields(vec!["age".into()]);
-            builder.execute(|_| ()).unwrap();
+            builder.execute(|_, _| ()).unwrap();
             wtxn.commit().unwrap();
         }
 
         let rtxn = index.read_txn().unwrap();
-        let fields_ids_map = index.fields_ids_map(&rtxn).unwrap();
-        let age_field_id = fields_ids_map.id("age").unwrap();
         let fields_ids = index.displayed_fields(&rtxn).unwrap();
-        assert_eq!(fields_ids.unwrap(), &[age_field_id][..]);
+        assert_eq!(fields_ids.unwrap(), &["age"][..]);
     }
 
     #[test]
@@ -511,20 +508,19 @@ mod tests {
     #[test]
     fn setting_searchable_recomputes_other_settings() {
         let path = tempfile::tempdir().unwrap();
-        let mut options = EnvOpenOptions::new();
-        options.map_size(10 * 1024 * 1024); // 10 MB
-        let index = Index::new(options, &path).unwrap();
+        let size = 10 * 1024 * 1024; // 10 MB
+        let index = Index::new(&path, Some(size)).unwrap();
 
         // Set all the settings except searchable
         let mut wtxn = index.write_txn().unwrap();
-        let mut builder = Settings::new(&mut wtxn, &index);
+        let mut builder = Settings::new(&mut wtxn, &index, 0);
         builder.set_displayed_fields(vec!["hello".to_string()]);
         builder.set_faceted_fields(hashmap!{
             "age".into() => "integer".into(),
             "toto".into() => "integer".into(),
         });
         builder.set_criteria(vec!["asc(toto)".to_string()]);
-        builder.execute(|_| ()).unwrap();
+        builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
         // check the output
@@ -536,9 +532,9 @@ mod tests {
 
         // We set toto and age as searchable to force reordering of the fields
         let mut wtxn = index.write_txn().unwrap();
-        let mut builder = Settings::new(&mut wtxn, &index);
+        let mut builder = Settings::new(&mut wtxn, &index, 1);
         builder.set_searchable_fields(vec!["toto".to_string(), "age".to_string()]);
-        builder.execute(|_| ()).unwrap();
+        builder.execute(|_, _| ()).unwrap();
         wtxn.commit().unwrap();
 
         let rtxn = index.read_txn().unwrap();

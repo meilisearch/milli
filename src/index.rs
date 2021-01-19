@@ -197,6 +197,16 @@ impl Index {
         self.main.get::<_, Str, SerdeBincode<Vec<&'t str>>>(rtxn, DISPLAYED_FIELDS_KEY)
     }
 
+    pub fn displayed_fields_ids<'t>(&self, rtxn: &'t RoTxn) -> heed::Result<Option<Vec<FieldId>>> {
+        let fields_ids_map = self.fields_ids_map(rtxn)?;
+        let ids = self.displayed_fields(rtxn)?
+            .map(|fields| fields
+                .into_iter()
+                .map(|name| fields_ids_map.id(name).expect("Field not found"))
+                .collect::<Vec<_>>());
+        Ok(ids)
+    }
+
     /* searchable fields */
 
     /// Writes the searchable fields, when this list is specified, only these are indexed.
