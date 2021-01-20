@@ -44,12 +44,12 @@ impl<'a> FacetDistribution<'a> {
     ) -> heed::Result<BTreeMap<FacetValue, u64>>
     {
         if let Some(candidates) = self.candidates.as_ref() {
-            if candidates.len() <= 1000 {
+            if candidates.len() <= 1000 || facet_type == FacetType::String {
                 let mut key_buffer = vec![field_id];
                 match facet_type {
                     FacetType::String => {
                         let mut facet_values = BTreeMap::new();
-                        for docid in candidates {
+                        for docid in candidates.iter().take(1000) {
                             key_buffer.truncate(1);
                             key_buffer.extend_from_slice(&docid.to_be_bytes());
                             let iter = self.index.field_id_docid_facet_values
