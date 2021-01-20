@@ -12,7 +12,7 @@ use fst::Set;
 use grenad::{Reader, FileFuse, Writer, Sorter, CompressionType};
 use heed::BytesEncode;
 use linked_hash_map::LinkedHashMap;
-use log::{debug, info};
+use log::{debug, info, warn};
 use meilisearch_tokenizer::{Analyzer, AnalyzerConfig};
 use ordered_float::OrderedFloat;
 use roaring::RoaringBitmap;
@@ -372,15 +372,19 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
                 Float(f) => FacetLevelValueF64Codec::bytes_encode(&(field_id, 0, *f, *f)).map(Cow::into_owned),
                 Integer(i) => FacetLevelValueI64Codec::bytes_encode(&(field_id, 0, i, i)).map(Cow::into_owned),
             };
-            let key = result.context("could not serialize facet key")?;
-            let bytes = CboRoaringBitmapCodec::bytes_encode(&docids)
-                .context("could not serialize docids")?;
-            if lmdb_key_valid_size(&key) {
-                match value {
-                    String(_) => str_sorter.insert(&key, &bytes)?,
-                    Float(_) => f64_sorter.insert(&key, &bytes)?,
-                    Integer(_) => i64_sorter.insert(&key, &bytes)?,
-                }
+
+            match result {
+                Some(key) => {
+                    let bytes = CboRoaringBitmapCodec::bytes_encode(&docids).context("could not serialize docids")?;
+                    if lmdb_key_valid_size(&key) {
+                        match value {
+                            String(_) => str_sorter.insert(&key, &bytes)?,
+                            Float(_) => f64_sorter.insert(&key, &bytes)?,
+                            Integer(_) => i64_sorter.insert(&key, &bytes)?,
+                        }
+                    }
+                },
+                None => warn!("could not serialize facet key: {:?}", value),
             }
         }
 
@@ -402,9 +406,13 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             Integer(i) => FieldDocIdFacetI64Codec::bytes_encode(&(field_id, document_id, *i)).map(Cow::into_owned),
         };
 
-        let key = result.context("could not serialize facet key")?;
-        if lmdb_key_valid_size(&key) {
-            sorter.insert(&key, &[])?;
+        match result {
+            Some(key) => {
+                if lmdb_key_valid_size(&key) {
+                    sorter.insert(&key, &[])?;
+                }
+            },
+            None => warn!("could not serialize facet key: {:?}", value),
         }
 
         Ok(())
