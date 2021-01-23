@@ -510,7 +510,6 @@ dependencies = [
 [[package]]
 name = "heed"
 version = "0.10.6"
-source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -527,12 +526,10 @@ dependencies = [
 [[package]]
 name = "heed-traits"
 version = "0.7.0"
-source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 
 [[package]]
 name = "heed-types"
 version = "0.7.2"
-source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -1208,9 +1205,9 @@ checksum = "21215c1b9d8f7832b433255bd9eea3e2779aa55b21b2f8e13aad62c74749b237"
 
 [[package]]
 name = "roaring"
-version = "0.6.1"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99a260b0fb7df2095948f4a1d37afe5d1a08a2ccc7380f418cec049dc9560077"
+checksum = "4d60b41c8f25d07cecab125cb46ebbf234fc055effc61ca2392a3ef4f9422304"
 dependencies = [
  "byteorder",
 ]

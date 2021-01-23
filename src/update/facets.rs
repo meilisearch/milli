@@ -3,13 +3,13 @@ use std::fs::File;
 use std::num::NonZeroUsize;
 
 use grenad::{CompressionType, Reader, Writer, FileFuse};
-use heed::types::{ByteSlice, DecodeIgnore};
+use heed::types::DecodeIgnore;
 use heed::{BytesEncode, Error};
 use log::debug;
 use roaring::RoaringBitmap;
 
 use crate::facet::{FacetType, FacetBounded};
-use crate::heed_codec::CboRoaringBitmapCodec;
+use crate::heed_codec::{CboRoaringBitmapCodec, ByteSlice};
 use crate::heed_codec::facet::{FacetLevelValueStrCodec, FacetLevelValueI64Codec, FacetLevelValueF64Codec};
 use crate::Index;
 use crate::update::index_documents::WriteMethod;

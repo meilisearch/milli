@@ -4,9 +4,9 @@ use std::{str, io, fmt};
 use anyhow::Context;
 use byte_unit::Byte;
 use heed::EnvOpenOptions;
-use heed::types::ByteSlice;
 use structopt::StructOpt;
 
+use crate::heed_codec::{UntypedDatabase, ByteSlice};
 use crate::{Index, CboRoaringBitmapCodec};
 
 use Command::*;
@@ -646,7 +646,7 @@ fn database_stats(index: &Index, rtxn: &heed::RoTxn, name: &str) -> anyhow::Resu
     use crate::{BoRoaringBitmapCodec, RoaringBitmapCodec};
 
     fn compute_stats<'a, DC: BytesDecode<'a, DItem = RoaringBitmap>>(
-        db: heed::UntypedDatabase,
+        db: UntypedDatabase,
         rtxn: &'a heed::RoTxn,
         name: &str,
     ) -> anyhow::Result<()>

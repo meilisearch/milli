@@ -9,7 +9,6 @@ use std::time::Instant;
 use anyhow::Context;
 use bstr::ByteSlice as _;
 use grenad::{Writer, Sorter, Merger, Reader, FileFuse, CompressionType};
-use heed::types::ByteSlice;
 use log::{debug, info, error};
 use memmap::Mmap;
 use rayon::prelude::*;
@@ -17,6 +16,7 @@ use rayon::ThreadPool;
 
 use crate::index::Index;
 use crate::update::{Facets, UpdateIndexingStep};
+use crate::heed_codec::{UntypedDatabase, ByteSlice};
 use self::store::{Store, Readers};
 use self::merge_function::{
     main_merge, word_docids_merge, words_pairs_proximities_docids_merge,
@@ -92,11 +92,12 @@ pub fn merge_readers(sources: Vec<Reader<FileFuse>>, merge: MergeFn) -> Merger<F
 
 pub fn merge_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
-    database: heed::UntypedDatabase,
+    database: UntypedDatabase,
     sources: Vec<Reader<FileFuse>>,
     merge: MergeFn,
     method: WriteMethod,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+{
     debug!("Merging {} MTBL stores...", sources.len());
     let before = Instant::now();
 
@@ -136,11 +137,12 @@ pub fn merge_into_lmdb_database(
 
 pub fn write_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
-    database: heed::UntypedDatabase,
+    database: UntypedDatabase,
     mut reader: Reader<FileFuse>,
     merge: MergeFn,
     method: WriteMethod,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+{
     debug!("Writing MTBL stores...");
     let before = Instant::now();
 
@@ -514,7 +516,7 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         self.index.put_documents_ids(self.wtxn, &documents_ids)?;
 
         let mut database_count = 0;
-        let total_databases = 7;
+        let total_databases = 9;
 
         progress_callback(UpdateIndexingStep::MergeDataIntoFinalDatabase {
             databases_seen: 0,

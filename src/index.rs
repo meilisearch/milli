@@ -4,12 +4,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use heed::types::*;
-use heed::{UntypedDatabase, Database, RwTxn, RoTxn};
+use heed::{Database, RwTxn, RoTxn};
 use roaring::RoaringBitmap;
 
 use crate::facet::FacetType;
 use crate::fields_ids_map::FieldsIdsMap;
 use crate::heed_codec::facet::{FacetLevelValueStrCodec, FacetLevelValueF64Codec, FacetLevelValueI64Codec};
+use crate::heed_codec::{UntypedDatabase, ByteSlice};
 use crate::{BEU32, DocumentId, FieldId, ExternalDocumentsIds};
 use crate::{BEU32StrCodec, StrStrU8Codec, ObkvCodec};
 use crate::{default_criteria, Criterion, Search, FacetDistribution};

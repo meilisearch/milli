@@ -53,7 +53,7 @@ impl<'a> FacetDistribution<'a> {
                             key_buffer.truncate(1);
                             key_buffer.extend_from_slice(&docid.to_be_bytes());
                             let iter = self.index.field_id_docid_facet_values
-                                .prefix_iter(self.rtxn, &key_buffer)?
+                                .prefix_iter(self.rtxn, &key_buffer.as_slice())?
                                 .remap_key_type::<FieldDocIdFacetStringCodec>();
                             for result in iter {
                                 let ((_, _, value), ()) = result?;
@@ -68,7 +68,7 @@ impl<'a> FacetDistribution<'a> {
                             key_buffer.truncate(1);
                             key_buffer.extend_from_slice(&docid.to_be_bytes());
                             let iter = self.index.field_id_docid_facet_values
-                                .prefix_iter(self.rtxn, &key_buffer)?
+                                .prefix_iter(self.rtxn, &key_buffer.as_slice())?
                                 .remap_key_type::<FieldDocIdFacetF64Codec>();
                             for result in iter {
                                 let ((_, _, value), ()) = result?;
@@ -83,7 +83,7 @@ impl<'a> FacetDistribution<'a> {
                             key_buffer.truncate(1);
                             key_buffer.extend_from_slice(&docid.to_be_bytes());
                             let iter = self.index.field_id_docid_facet_values
-                                .prefix_iter(self.rtxn, &key_buffer)?
+                                .prefix_iter(self.rtxn, &key_buffer.as_slice())?
                                 .remap_key_type::<FieldDocIdFacetI64Codec>();
                             for result in iter {
                                 let ((_, _, value), ()) = result?;

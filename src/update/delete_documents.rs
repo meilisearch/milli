@@ -197,7 +197,8 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             self.index.put_faceted_documents_ids(self.wtxn, field_id, &docids)?;
 
             // We delete the entries that are part of the documents ids.
-            let iter = field_id_docid_facet_values.prefix_iter_mut(self.wtxn, &&[field_id][..])?;
+            let prefix = &[field_id][..];
+            let iter = field_id_docid_facet_values.prefix_iter_mut(self.wtxn, &prefix)?;
             match facet_type {
                 FacetType::String => {
                     let mut iter = iter.remap_key_type::<FieldDocIdFacetStringCodec>();
