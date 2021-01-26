@@ -12,7 +12,7 @@ use crate::BEU64;
 pub struct UpdateStore<M, N> {
     env: Env,
     pending_meta: Database<OwnedType<BEU64>, SerdeJson<M>>,
-    pending: Database<OwnedType<BEU64>, ByteSlice<'static>>,
+    pending: Database<OwnedType<BEU64>, ByteSlice>,
     processed_meta: Database<OwnedType<BEU64>, SerdeJson<N>>,
     aborted_meta: Database<OwnedType<BEU64>, SerdeJson<M>>,
     notification_sender: Sender<()>,

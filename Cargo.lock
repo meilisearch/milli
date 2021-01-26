@@ -510,6 +510,7 @@ dependencies = [
 [[package]]
 name = "heed"
 version = "0.10.6"
+source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -526,10 +527,12 @@ dependencies = [
 [[package]]
 name = "heed-traits"
 version = "0.7.0"
+source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 
 [[package]]
 name = "heed-types"
 version = "0.7.2"
+source = "git+https://github.com/Kerollmops/heed?branch=better-stable-bytes-encode-trait#d7a65982d595c847adabf8d3d0e7f8e2ee703a13"
 dependencies = [
  "bincode",
  "bytemuck",
