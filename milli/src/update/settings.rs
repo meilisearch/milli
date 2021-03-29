@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -32,6 +32,7 @@ pub struct Settings<'a, 't, 'u, 'i> {
     displayed_fields: Option<Option<Vec<String>>>,
     faceted_fields: Option<Option<HashMap<String, String>>>,
     criteria: Option<Option<Vec<String>>>,
+    stop_words: Option<Option<HashSet<String>>>,
 }
 
 impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
@@ -55,6 +56,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             displayed_fields: None,
             faceted_fields: None,
             criteria: None,
+            stop_words: None,
             update_id,
         }
     }
@@ -89,6 +91,14 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 
     pub fn set_criteria(&mut self, criteria: Vec<String>) {
         self.criteria = Some(Some(criteria));
+    }
+
+    pub fn reset_stop_words(&mut self) {
+        self.stop_words = Some(None);
+    }
+
+    pub fn set_stop_words(&mut self, stop_words: HashSet<String>) {
+        self.stop_words = Some(Some(stop_words));
     }
 
     fn reindex<F>(&mut self, cb: &F, old_fields_ids_map: FieldsIdsMap) -> anyhow::Result<()>
@@ -210,6 +220,35 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         Ok(true)
     }
 
+    fn update_stop_words(&mut self) -> anyhow::Result<bool> {
+        match self.stop_words {
+            Some(Some(ref stop_words)) => {
+                let current = self.index.stop_words(self.wtxn)?;
+                let identical = current
+                    .map(|current| {
+                        stop_words.iter().all(|elem| current.contains(elem))
+                            && stop_words.len() == current.len()
+                    })
+                    .unwrap_or(false);
+
+                // we want to re-create our fst
+                if !identical {
+                    // we need to sort it first. TODO: use btreemap
+                    let mut words: Vec<String> = stop_words.iter().cloned().collect();
+                    words.sort();
+                    let fst = fst::Set::from_iter(&words)?;
+                    self.index.put_stop_words(self.wtxn, &fst)?;
+                }
+                Ok(!identical)
+            }
+            Some(None) => {
+                self.index.delete_faceted_fields(self.wtxn)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     fn update_facets(&mut self) -> anyhow::Result<bool> {
         match self.faceted_fields {
             Some(Some(ref fields)) => {
@@ -248,22 +287,23 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 
     pub fn execute<F>(mut self, progress_callback: F) -> anyhow::Result<()>
     where
-        F: Fn(UpdateIndexingStep, u64) + Sync
-        {
-            self.index.set_updated_at(self.wtxn, &Utc::now())?;
-            let old_fields_ids_map = self.index.fields_ids_map(&self.wtxn)?;
-            self.update_displayed()?;
-            let facets_updated = self.update_facets()?;
-            // update_criteria MUST be called after update_facets, since criterion fields must be set
-            // as facets.
-            self.update_criteria()?;
-            let searchable_updated = self.update_searchable()?;
+    F: Fn(UpdateIndexingStep, u64) + Sync
+    {
+        self.index.set_updated_at(self.wtxn, &Utc::now())?;
+        let old_fields_ids_map = self.index.fields_ids_map(&self.wtxn)?;
+        self.update_displayed()?;
+        let stop_words_updated = self.update_stop_words()?;
+        let facets_updated = self.update_facets()?;
+        // update_criteria MUST be called after update_facets, since criterion fields must be set
+        // as facets.
+        self.update_criteria()?;
+        let searchable_updated = self.update_searchable()?;
 
-            if facets_updated || searchable_updated {
-                self.reindex(&progress_callback, old_fields_ids_map)?;
-            }
-            Ok(())
+        if facets_updated || searchable_updated || stop_words_updated {
+            self.reindex(&progress_callback, old_fields_ids_map)?;
         }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
