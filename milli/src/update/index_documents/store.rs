@@ -141,7 +141,10 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             create_writer(chunk_compression_type, chunk_compression_level, f)
         })?;
 
-        let analyzer = Analyzer::new(AnalyzerConfig::default_with_stopwords(stop_words));
+        let mut config = AnalyzerConfig::default();
+        config.stop_words(stop_words);
+
+        let analyzer = Analyzer::new(config);
 
         Ok(Store {
             // Indexing parameters.
