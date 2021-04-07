@@ -13,6 +13,7 @@ use crate::criterion::Criterion;
 use crate::facet::FacetType;
 use crate::update::{ClearDocuments, IndexDocuments, UpdateIndexingStep};
 use crate::update::index_documents::{IndexDocumentsMethod, Transform};
+use meilisearch_tokenizer::{AnalyzerConfig, Analyzer};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Setting<T> {
@@ -70,6 +71,7 @@ pub struct Settings<'a, 't, 'u, 'i> {
     faceted_fields: Setting<HashMap<String, String>>,
     criteria: Setting<Vec<String>>,
     stop_words: Setting<BTreeSet<String>>,
+    synonyms: Setting<HashMap<String, Vec<String>>>,
 }
 
 impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
@@ -94,6 +96,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             faceted_fields: Setting::NotSet,
             criteria: Setting::NotSet,
             stop_words: Setting::NotSet,
+            synonyms: Setting::NotSet,
             update_id,
         }
     }
@@ -139,6 +142,18 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
             Setting::Reset
         } else {
             Setting::Set(stop_words)
+        }
+    }
+
+    pub fn reset_synonyms(&mut self) {
+        self.synonyms = Setting::Reset;
+    }
+
+    pub fn set_synonyms(&mut self, synonyms: HashMap<String, Vec<String>>) {
+        self.synonyms = if synonyms.is_empty() {
+            Setting::Reset
+        } else {
+            Setting::Set(synonyms)
         }
     }
 
@@ -267,7 +282,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 let current = self.index.stop_words(self.wtxn)?;
                 // since we can't compare a BTreeSet with an FST we are going to convert the
                 // BTreeSet to an FST and then compare bytes per bytes the two FSTs.
-                let fst = fst::Set::from_iter(&*stop_words)?;
+                let fst = fst::Set::from_iter(stop_words)?;
 
                 // Does the new FST differ from the previous one?
                 if current.map_or(true, |current| current.as_fst().as_bytes() != fst.as_fst().as_bytes()) {
@@ -279,6 +294,55 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 }
             }
             Setting::Reset => Ok(self.index.delete_stop_words(self.wtxn)?),
+            Setting::NotSet => Ok(false),
+        }
+    }
+
+    fn update_synonyms(&mut self) -> anyhow::Result<bool> {
+        match self.synonyms {
+            Setting::Set(ref synonyms) => {
+                let old_synonyms = self.index.synonyms(self.wtxn)?.unwrap_or_default();
+
+                let mut config = AnalyzerConfig::default();
+
+                let stop_words = self.index.stop_words(self.wtxn)?;
+                if let Some(stop_words) = &stop_words {
+                    config.stop_words(stop_words);
+                }
+
+                let analyzer = Analyzer::new(config);
+
+                let normalize = |text: &String| {
+                    analyzer
+                        .analyze(text)
+                        .tokens()
+                        .filter_map(|token|
+                            if token.is_word() { Some(token.text().to_string()) } else { None }
+                        )
+                        .collect::<Vec<_>>()
+                };
+
+                let new_synonyms = synonyms
+                    .iter()
+                    .map(|(word, synonyms)| {
+                        let normalized_word = normalize(word);
+                        let normalized_synonyms = synonyms.iter()
+                            .map(normalize)
+                            .unique()
+                            .collect::<Vec<_>>();
+
+                        (normalized_word, normalized_synonyms)
+                    })
+                    .collect();
+
+                if new_synonyms != old_synonyms {
+                    self.index.put_synonyms(self.wtxn, &new_synonyms)?;
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            Setting::Reset => Ok(self.index.delete_synonyms(self.wtxn)?),
             Setting::NotSet => Ok(false),
         }
     }
@@ -331,9 +395,10 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         // update_criteria MUST be called after update_facets, since criterion fields must be set
         // as facets.
         self.update_criteria()?;
+        let synonyms_updated = self.update_synonyms()?;
         let searchable_updated = self.update_searchable()?;
 
-        if facets_updated || searchable_updated || stop_words_updated {
+        if stop_words_updated || facets_updated || synonyms_updated || searchable_updated {
             self.reindex(&progress_callback, old_fields_ids_map)?;
         }
         Ok(())

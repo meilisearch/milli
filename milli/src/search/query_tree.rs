@@ -159,7 +159,7 @@ trait Context {
     fn is_stop_word(&self, word: &str) -> anyhow::Result<bool> {
         Ok(self.stop_words()?.map_or(false, |s| s.contains(word)))
     }
-    fn synonyms<S: AsRef<str>>(&self, words: &[S]) -> heed::Result<Option<Vec<Vec<String>>>>;
+    fn synonyms<S: AsRef<str>>(&self, words: &[S]) -> anyhow::Result<Option<Vec<Vec<String>>>>;
     fn word_documents_count(&self, word: &str) -> heed::Result<Option<u64>> {
         match self.word_docids(word)? {
             Some(rb) => Ok(Some(rb.len())),
@@ -181,16 +181,16 @@ impl<'a> Context for QueryTreeBuilder<'a> {
         self.index.word_docids.get(self.rtxn, word)
     }
 
-    fn word_documents_count(&self, word: &str) -> heed::Result<Option<u64>> {
-        self.index.word_documents_count(self.rtxn, word)
-    }
-
-    fn synonyms<S: AsRef<str>>(&self, _words: &[S]) -> heed::Result<Option<Vec<Vec<String>>>> {
-        Ok(None)
-    }
-
     fn stop_words(&self) -> anyhow::Result<Option<Set<&[u8]>>> {
         self.index.stop_words(self.rtxn)
+    }
+
+    fn synonyms<S: AsRef<str>>(&self, words: &[S]) -> anyhow::Result<Option<Vec<Vec<String>>>> {
+        self.index.words_synonyms(self.rtxn, words)
+    }
+
+    fn word_documents_count(&self, word: &str) -> heed::Result<Option<u64>> {
+        self.index.word_documents_count(self.rtxn, word)
     }
 }
 
@@ -277,10 +277,10 @@ fn typos(word: String, authorize_typos: bool) -> QueryKind {
     }
 }
 
-/// Fetch synonyms from the `Context` for the provided word
+/// Fetch synonyms from the `Context` for the provided words
 /// and create the list of operations for the query tree
-fn synonyms(ctx: &impl Context, word: &[&str]) -> heed::Result<Option<Vec<Operation>>> {
-    let synonyms = ctx.synonyms(word)?;
+fn synonyms(ctx: &impl Context, words: &[&str]) -> anyhow::Result<Option<Vec<Operation>>> {
+    let synonyms = ctx.synonyms(words)?;
 
     Ok(synonyms.map(|synonyms| {
         synonyms.into_iter().map(|synonym| {
@@ -597,18 +597,17 @@ mod test {
             Ok(self.postings.get(word).cloned())
         }
 
-        fn synonyms<S: AsRef<str>>(&self, words: &[S]) -> heed::Result<Option<Vec<Vec<String>>>> {
-            let words: Vec<_> = words.iter().map(|s| s.as_ref().to_owned()).collect();
-            Ok(self.synonyms.get(&words).cloned())
-        }
-
         fn stop_words(&self) -> anyhow::Result<Option<Set<&[u8]>>> {
             Ok(None)
+        }
+
+        fn synonyms<S: AsRef<str>>(&self, words: &[S]) -> anyhow::Result<Option<Vec<Vec<String>>>> {
+            let words: Vec<_> = words.iter().map(|s| s.as_ref().to_string()).collect();
+            Ok(self.synonyms.get(&words).cloned())
         }
     }
 
     impl Default for TestContext {
-
         fn default() -> TestContext {
             let mut rng = StdRng::seed_from_u64(102);
             let rng = &mut rng;
