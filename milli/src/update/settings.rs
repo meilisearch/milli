@@ -706,6 +706,64 @@ mod tests {
     }
 
     #[test]
+    fn set_and_reset_synonyms() {
+        let path = tempfile::tempdir().unwrap();
+        let mut options = EnvOpenOptions::new();
+        options.map_size(10 * 1024 * 1024); // 10 MB
+        let index = Index::new(options, &path).unwrap();
+
+        // Send 3 documents with ids from 1 to 3.
+        let mut wtxn = index.write_txn().unwrap();
+        let content = &b"name,age,maxim\nkevin,23,I love dogs\nkevina,21,Doggos are the best\nbenoit,34,The crepes are really good\n"[..];
+        let mut builder = IndexDocuments::new(&mut wtxn, &index, 0);
+        builder.update_format(UpdateFormat::Csv);
+        builder.execute(content, |_, _| ()).unwrap();
+
+        // In the same transaction provide some synonyms
+        let mut builder = Settings::new(&mut wtxn, &index, 0);
+        builder.set_synonyms(hashmap! {
+            "blini".to_string() => vec!["crepes".to_string()],
+            "super like".to_string() => vec!["love".to_string()],
+            "puppies".to_string() => vec!["dogs".to_string(), "doggos".to_string()]
+        });
+        builder.execute(|_, _| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        // Ensure synonyms are effectively stored
+        let rtxn = index.read_txn().unwrap();
+        let synonyms = index.synonyms(&rtxn).unwrap();
+        assert!(synonyms.is_some()); // at this point the index should return something
+
+        // Check that we can use synonyms
+        let result = index.search(&rtxn).query("blini").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        let result = index.search(&rtxn).query("super like").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 1);
+        let result = index.search(&rtxn).query("puppies").execute().unwrap();
+        assert_eq!(result.documents_ids.len(), 2);
+
+        // Reset the synonyms
+        let mut wtxn = index.write_txn().unwrap();
+        let mut builder = Settings::new(&mut wtxn, &index, 0);
+        builder.reset_synonyms();
+        builder.execute(|_, _| ()).unwrap();
+        wtxn.commit().unwrap();
+
+        // Ensure synonyms are reset
+        let rtxn = index.read_txn().unwrap();
+        let synonyms = index.synonyms(&rtxn).unwrap();
+        assert!(synonyms.is_none());
+
+        // Check that synonyms are no longer work
+        let result = index.search(&rtxn).query("blini").execute().unwrap();
+        assert!(result.documents_ids.is_empty());
+        let result = index.search(&rtxn).query("super like").execute().unwrap();
+        assert!(result.documents_ids.is_empty());
+        let result = index.search(&rtxn).query("puppies").execute().unwrap();
+        assert!(result.documents_ids.is_empty());
+    }
+
+    #[test]
     fn setting_searchable_recomputes_other_settings() {
         let path = tempfile::tempdir().unwrap();
         let mut options = EnvOpenOptions::new();
