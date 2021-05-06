@@ -6,7 +6,7 @@ use std::iter::FromIterator;
 use std::time::Instant;
 use std::{cmp, iter};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use bstr::ByteSlice as _;
 use fst::Set;
 use grenad::{Reader, FileFuse, Writer, Sorter, CompressionType};
@@ -427,6 +427,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
                 .context("could not serialize docids")?;
             if lmdb_key_valid_size(&key) {
                 sorter.insert(&key, &bytes)?;
+            } else {
+                return Err(anyhow!("facet key too large"));
             }
         }
 
@@ -450,6 +452,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
         let key = result.context("could not serialize facet key")?;
         if lmdb_key_valid_size(&key) {
             sorter.insert(&key, &[])?;
+        } else {
+            return Err(anyhow!("facet key too large"));
         }
 
         Ok(())
