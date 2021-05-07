@@ -185,9 +185,8 @@ impl FacetCondition {
                 Either::Left(array) => {
                     let mut ors = None;
                     for rule in array {
-                        let mut iter = rule.as_ref().splitn(2, ':');
-                        let key = iter.next().context("missing facet condition key")?;
-                        let value = iter.next().context("missing facet condition value")?;
+                        let kv = rule.as_ref().split_once(':').context("invalid facet condition")?;
+                        let (key, value) = (kv.0.trim(), kv.1);
                         let condition = facet_condition(&fields_ids_map, &faceted_fields, key, value)?;
                         ors = match ors.take() {
                             Some(ors) => Some(Or(Box::new(ors), Box::new(condition))),
@@ -203,9 +202,8 @@ impl FacetCondition {
                     }
                 },
                 Either::Right(rule) => {
-                    let mut iter = rule.as_ref().splitn(2, ':');
-                    let key = iter.next().context("missing facet condition key")?;
-                    let value = iter.next().context("missing facet condition value")?;
+                    let kv = rule.as_ref().split_once(':').context("invalid facet condition")?;
+                    let (key, value) = (kv.0.trim(), kv.1);
                     let condition = facet_condition(&fields_ids_map, &faceted_fields, key, value)?;
                     ands = match ands.take() {
                         Some(ands) => Some(And(Box::new(ands), Box::new(condition))),
@@ -717,11 +715,11 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
         let condition = FacetCondition::from_array(
             &rtxn, &index,
-            vec![Either::Right("channel:gotaga"), Either::Left(vec!["timestamp:44", "channel:-ponce"])],
+            vec![Either::Right("channel:gotaga"), Either::Left(vec!["timestamp :44", "channel: -ponce", "channel : domingo"])],
         ).unwrap().unwrap();
         let expected = FacetCondition::from_str(
             &rtxn, &index,
-            "channel = gotaga AND (timestamp = 44 OR channel != ponce)",
+            "channel = gotaga AND (timestamp = 44 OR channel != ponce OR channel = domingo)",
         ).unwrap();
         assert_eq!(condition, expected);
     }
