@@ -3,5 +3,5 @@
 #![allow(dead_code)]
 
 
-pub const SMOL_SONGS: &str = "/home/irevoire/milli/target/debug/build/benchmarks-7d7a12e0ba3265b4/out/smol-songs.csv";
-pub const SMOL_WIKI_ARTICLES: &str = "/home/irevoire/milli/target/debug/build/benchmarks-7d7a12e0ba3265b4/out/smol-wiki-articles.csv";
+pub const SMOL_SONGS: &str = "./smol-songs.csv";
+pub const SMOL_WIKI_ARTICLES: &str = "./smol-wiki-articles.csv";
