@@ -1,18 +1,17 @@
 use std::str;
 
 use fst::automaton::{Automaton, Str};
-use fst::{Streamer, IntoStreamer};
+use fst::{IntoStreamer, Streamer};
 use grenad::CompressionType;
-use heed::BytesEncode;
 use heed::types::ByteSlice;
+use heed::BytesEncode;
 use log::debug;
 
-use crate::Index;
 use crate::heed_codec::StrStrU8Codec;
 use crate::update::index_documents::{
-    WriteMethod, create_sorter, sorter_into_lmdb_database,
-    words_pairs_proximities_docids_merge,
+    create_sorter, sorter_into_lmdb_database, words_pairs_proximities_docids_merge, WriteMethod,
 };
+use crate::Index;
 
 pub struct WordPrefixPairProximityDocids<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -28,8 +27,7 @@ impl<'t, 'u, 'i> WordPrefixPairProximityDocids<'t, 'u, 'i> {
     pub fn new(
         wtxn: &'t mut heed::RwTxn<'i, 'u>,
         index: &'i Index,
-    ) -> WordPrefixPairProximityDocids<'t, 'u, 'i>
-    {
+    ) -> WordPrefixPairProximityDocids<'t, 'u, 'i> {
         WordPrefixPairProximityDocids {
             wtxn,
             index,

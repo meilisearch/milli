@@ -4,22 +4,21 @@ use std::path::Path;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use heed::{Database, PolyDatabase, RoTxn, RwTxn};
 use heed::types::*;
+use heed::{Database, PolyDatabase, RoTxn, RwTxn};
 use roaring::RoaringBitmap;
 
-use crate::{Criterion, default_criteria, FacetDistribution, FieldsDistribution, Search};
-use crate::{BEU32, DocumentId, ExternalDocumentsIds, FieldId};
-use crate::{
-    BEU32StrCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec,
-    ObkvCodec, RoaringBitmapCodec, RoaringBitmapLenCodec, StrLevelPositionCodec, StrStrU8Codec,
-    FieldIdWordCountCodec,
-};
-use crate::heed_codec::facet::{
-    FieldDocIdFacetF64Codec, FieldDocIdFacetStringCodec,
-    FacetValueStringCodec, FacetLevelValueF64Codec,
-};
 use crate::fields_ids_map::FieldsIdsMap;
+use crate::heed_codec::facet::{
+    FacetLevelValueF64Codec, FacetValueStringCodec, FieldDocIdFacetF64Codec,
+    FieldDocIdFacetStringCodec,
+};
+use crate::{default_criteria, Criterion, FacetDistribution, FieldsDistribution, Search};
+use crate::{
+    BEU32StrCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec, FieldIdWordCountCodec, ObkvCodec,
+    RoaringBitmapCodec, RoaringBitmapLenCodec, StrLevelPositionCodec, StrStrU8Codec,
+};
+use crate::{DocumentId, ExternalDocumentsIds, FieldId, BEU32};
 
 pub const CRITERIA_KEY: &str = "criteria";
 pub const DISPLAYED_FIELDS_KEY: &str = "displayed-fields";
@@ -84,7 +83,10 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> anyhow::Result<Index> {
+    pub fn new<P: AsRef<Path>>(
+        mut options: heed::EnvOpenOptions,
+        path: P,
+    ) -> anyhow::Result<Index> {
         options.max_dbs(14);
 
         let env = options.open(path)?;
@@ -93,14 +95,17 @@ impl Index {
         let word_prefix_docids = env.create_database(Some("word-prefix-docids"))?;
         let docid_word_positions = env.create_database(Some("docid-word-positions"))?;
         let word_pair_proximity_docids = env.create_database(Some("word-pair-proximity-docids"))?;
-        let word_prefix_pair_proximity_docids = env.create_database(Some("word-prefix-pair-proximity-docids"))?;
+        let word_prefix_pair_proximity_docids =
+            env.create_database(Some("word-prefix-pair-proximity-docids"))?;
         let word_level_position_docids = env.create_database(Some("word-level-position-docids"))?;
         let field_id_word_count_docids = env.create_database(Some("field-id-word-count-docids"))?;
-        let word_prefix_level_position_docids = env.create_database(Some("word-prefix-level-position-docids"))?;
+        let word_prefix_level_position_docids =
+            env.create_database(Some("word-prefix-level-position-docids"))?;
         let facet_id_f64_docids = env.create_database(Some("facet-id-f64-docids"))?;
         let facet_id_string_docids = env.create_database(Some("facet-id-string-docids"))?;
         let field_id_docid_facet_f64s = env.create_database(Some("field-id-docid-facet-f64s"))?;
-        let field_id_docid_facet_strings = env.create_database(Some("field-id-docid-facet-strings"))?;
+        let field_id_docid_facet_strings =
+            env.create_database(Some("field-id-docid-facet-strings"))?;
         let documents = env.create_database(Some("documents"))?;
 
         Index::initialize_creation_dates(&env, main)?;
@@ -169,7 +174,10 @@ impl Index {
 
     /// Returns the internal documents ids.
     pub fn documents_ids(&self, rtxn: &RoTxn) -> heed::Result<RoaringBitmap> {
-        Ok(self.main.get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?.unwrap_or_default())
+        Ok(self
+            .main
+            .get::<_, Str, RoaringBitmapCodec>(rtxn, DOCUMENTS_IDS_KEY)?
+            .unwrap_or_default())
     }
 
     /// Returns the number of documents indexed in the database.
@@ -203,8 +211,7 @@ impl Index {
         &self,
         wtxn: &mut RwTxn,
         external_documents_ids: &ExternalDocumentsIds<'a>,
-    ) -> heed::Result<()>
-    {
+    ) -> heed::Result<()> {
         let ExternalDocumentsIds { hard, soft } = external_documents_ids;
         let hard = hard.as_fst().as_bytes();
         let soft = soft.as_fst().as_bytes();
@@ -215,7 +222,10 @@ impl Index {
 
     /// Returns the external documents ids map which associate the external ids
     /// with the internal ids (i.e. `u32`).
-    pub fn external_documents_ids<'t>(&self, rtxn: &'t RoTxn) -> anyhow::Result<ExternalDocumentsIds<'t>> {
+    pub fn external_documents_ids<'t>(
+        &self,
+        rtxn: &'t RoTxn,
+    ) -> anyhow::Result<ExternalDocumentsIds<'t>> {
         let hard = self.main.get::<_, Str, ByteSlice>(rtxn, HARD_EXTERNAL_DOCUMENTS_IDS_KEY)?;
         let soft = self.main.get::<_, Str, ByteSlice>(rtxn, SOFT_EXTERNAL_DOCUMENTS_IDS_KEY)?;
         let hard = match hard {
@@ -240,21 +250,35 @@ impl Index {
     /// Returns the fields ids map which associate the documents keys with an internal field id
     /// (i.e. `u8`), this field id is used to identify fields in the obkv documents.
     pub fn fields_ids_map(&self, rtxn: &RoTxn) -> heed::Result<FieldsIdsMap> {
-        Ok(self.main.get::<_, Str, SerdeJson<FieldsIdsMap>>(rtxn, FIELDS_IDS_MAP_KEY)?.unwrap_or_default())
+        Ok(self
+            .main
+            .get::<_, Str, SerdeJson<FieldsIdsMap>>(rtxn, FIELDS_IDS_MAP_KEY)?
+            .unwrap_or_default())
     }
 
     /* fields distribution */
 
     /// Writes the fields distribution which associates every field name with
     /// the number of times it occurs in the documents.
-    pub fn put_fields_distribution(&self, wtxn: &mut RwTxn, distribution: &FieldsDistribution) -> heed::Result<()> {
-        self.main.put::<_, Str, SerdeJson<FieldsDistribution>>(wtxn, FIELDS_DISTRIBUTION_KEY, distribution)
+    pub fn put_fields_distribution(
+        &self,
+        wtxn: &mut RwTxn,
+        distribution: &FieldsDistribution,
+    ) -> heed::Result<()> {
+        self.main.put::<_, Str, SerdeJson<FieldsDistribution>>(
+            wtxn,
+            FIELDS_DISTRIBUTION_KEY,
+            distribution,
+        )
     }
 
     /// Returns the fields distribution which associates every field name with
     /// the number of times it occurs in the documents.
     pub fn fields_distribution(&self, rtxn: &RoTxn) -> heed::Result<FieldsDistribution> {
-        Ok(self.main.get::<_, Str, SerdeJson<FieldsDistribution>>(rtxn, FIELDS_DISTRIBUTION_KEY)?.unwrap_or_default())
+        Ok(self
+            .main
+            .get::<_, Str, SerdeJson<FieldsDistribution>>(rtxn, FIELDS_DISTRIBUTION_KEY)?
+            .unwrap_or_default())
     }
 
     /* displayed fields */
@@ -279,11 +303,12 @@ impl Index {
 
     pub fn displayed_fields_ids(&self, rtxn: &RoTxn) -> heed::Result<Option<Vec<FieldId>>> {
         let fields_ids_map = self.fields_ids_map(rtxn)?;
-        let ids = self.displayed_fields(rtxn)?
-            .map(|fields| fields
+        let ids = self.displayed_fields(rtxn)?.map(|fields| {
+            fields
                 .into_iter()
                 .map(|name| fields_ids_map.id(name).expect("Field not found"))
-                .collect::<Vec<_>>());
+                .collect::<Vec<_>>()
+        });
         Ok(ids)
     }
 
@@ -327,7 +352,11 @@ impl Index {
     /* filterable fields */
 
     /// Writes the filterable fields names in the database.
-    pub fn put_filterable_fields(&self, wtxn: &mut RwTxn, fields: &HashSet<String>) -> heed::Result<()> {
+    pub fn put_filterable_fields(
+        &self,
+        wtxn: &mut RwTxn,
+        fields: &HashSet<String>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, SerdeJson<_>>(wtxn, FILTERABLE_FIELDS_KEY, fields)
     }
 
@@ -366,9 +395,8 @@ impl Index {
     pub fn faceted_fields(&self, rtxn: &RoTxn) -> heed::Result<HashSet<String>> {
         let filterable_fields = self.filterable_fields(rtxn)?;
         let distinct_field = self.distinct_field(rtxn)?;
-        let asc_desc_fields = self.criteria(rtxn)?
-            .into_iter()
-            .filter_map(|criterion| match criterion {
+        let asc_desc_fields =
+            self.criteria(rtxn)?.into_iter().filter_map(|criterion| match criterion {
                 Criterion::Asc(field) | Criterion::Desc(field) => Some(field),
                 _otherwise => None,
             });
@@ -407,8 +435,7 @@ impl Index {
         wtxn: &mut RwTxn,
         field_id: FieldId,
         docids: &RoaringBitmap,
-    ) -> heed::Result<()>
-    {
+    ) -> heed::Result<()> {
         let mut buffer = [0u8; STRING_FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()]
             .copy_from_slice(STRING_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
@@ -421,8 +448,7 @@ impl Index {
         &self,
         rtxn: &RoTxn,
         field_id: FieldId,
-    ) -> heed::Result<RoaringBitmap>
-    {
+    ) -> heed::Result<RoaringBitmap> {
         let mut buffer = [0u8; STRING_FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()]
             .copy_from_slice(STRING_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
@@ -439,8 +465,7 @@ impl Index {
         wtxn: &mut RwTxn,
         field_id: FieldId,
         docids: &RoaringBitmap,
-    ) -> heed::Result<()>
-    {
+    ) -> heed::Result<()> {
         let mut buffer = [0u8; NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()]
             .copy_from_slice(NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
@@ -453,8 +478,7 @@ impl Index {
         &self,
         rtxn: &RoTxn,
         field_id: FieldId,
-    ) -> heed::Result<RoaringBitmap>
-    {
+    ) -> heed::Result<RoaringBitmap> {
         let mut buffer = [0u8; NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len() + 1];
         buffer[..NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()]
             .copy_from_slice(NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
@@ -467,7 +491,11 @@ impl Index {
 
     /* distinct field */
 
-    pub(crate) fn put_distinct_field(&self, wtxn: &mut RwTxn, distinct_field: &str) -> heed::Result<()> {
+    pub(crate) fn put_distinct_field(
+        &self,
+        wtxn: &mut RwTxn,
+        distinct_field: &str,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, Str>(wtxn, DISTINCT_FIELD_KEY, distinct_field)
     }
 
@@ -499,7 +527,11 @@ impl Index {
     /* words fst */
 
     /// Writes the FST which is the words dictionary of the engine.
-    pub fn put_words_fst<A: AsRef<[u8]>>(&self, wtxn: &mut RwTxn, fst: &fst::Set<A>) -> heed::Result<()> {
+    pub fn put_words_fst<A: AsRef<[u8]>>(
+        &self,
+        wtxn: &mut RwTxn,
+        fst: &fst::Set<A>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, ByteSlice>(wtxn, WORDS_FST_KEY, fst.as_fst().as_bytes())
     }
 
@@ -513,7 +545,11 @@ impl Index {
 
     /* stop words */
 
-    pub fn put_stop_words<A: AsRef<[u8]>>(&self, wtxn: &mut RwTxn, fst: &fst::Set<A>) -> heed::Result<()> {
+    pub fn put_stop_words<A: AsRef<[u8]>>(
+        &self,
+        wtxn: &mut RwTxn,
+        fst: &fst::Set<A>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, ByteSlice>(wtxn, STOP_WORDS_KEY, fst.as_fst().as_bytes())
     }
 
@@ -530,7 +566,11 @@ impl Index {
 
     /* synonyms */
 
-    pub fn put_synonyms(&self, wtxn: &mut RwTxn, synonyms: &HashMap<Vec<String>, Vec<Vec<String>>>) -> heed::Result<()> {
+    pub fn put_synonyms(
+        &self,
+        wtxn: &mut RwTxn,
+        synonyms: &HashMap<Vec<String>, Vec<Vec<String>>>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, SerdeBincode<_>>(wtxn, SYNONYMS_KEY, synonyms)
     }
 
@@ -542,7 +582,11 @@ impl Index {
         Ok(self.main.get::<_, Str, SerdeBincode<_>>(rtxn, SYNONYMS_KEY)?.unwrap_or_default())
     }
 
-    pub fn words_synonyms<S: AsRef<str>>(&self, rtxn: &RoTxn, words: &[S]) -> heed::Result<Option<Vec<Vec<String>>>> {
+    pub fn words_synonyms<S: AsRef<str>>(
+        &self,
+        rtxn: &RoTxn,
+        words: &[S],
+    ) -> heed::Result<Option<Vec<Vec<String>>>> {
         let words: Vec<_> = words.iter().map(|s| s.as_ref().to_owned()).collect();
         Ok(self.synonyms(rtxn)?.remove(&words))
     }
@@ -550,12 +594,19 @@ impl Index {
     /* words prefixes fst */
 
     /// Writes the FST which is the words prefixes dictionnary of the engine.
-    pub fn put_words_prefixes_fst<A: AsRef<[u8]>>(&self, wtxn: &mut RwTxn, fst: &fst::Set<A>) -> heed::Result<()> {
+    pub fn put_words_prefixes_fst<A: AsRef<[u8]>>(
+        &self,
+        wtxn: &mut RwTxn,
+        fst: &fst::Set<A>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, ByteSlice>(wtxn, WORDS_PREFIXES_FST_KEY, fst.as_fst().as_bytes())
     }
 
     /// Returns the FST which is the words prefixes dictionnary of the engine.
-    pub fn words_prefixes_fst<'t>(&self, rtxn: &'t RoTxn) -> anyhow::Result<fst::Set<Cow<'t, [u8]>>> {
+    pub fn words_prefixes_fst<'t>(
+        &self,
+        rtxn: &'t RoTxn,
+    ) -> anyhow::Result<fst::Set<Cow<'t, [u8]>>> {
         match self.main.get::<_, Str, ByteSlice>(rtxn, WORDS_PREFIXES_FST_KEY)? {
             Some(bytes) => Ok(fst::Set::new(bytes)?.map_data(Cow::Borrowed)?),
             None => Ok(fst::Set::default().map_data(Cow::Owned)?),
@@ -576,13 +627,14 @@ impl Index {
     pub fn documents<'t>(
         &self,
         rtxn: &'t RoTxn,
-        ids: impl IntoIterator<Item=DocumentId>,
-    ) -> anyhow::Result<Vec<(DocumentId, obkv::KvReader<'t>)>>
-    {
+        ids: impl IntoIterator<Item = DocumentId>,
+    ) -> anyhow::Result<Vec<(DocumentId, obkv::KvReader<'t>)>> {
         let mut documents = Vec::new();
 
         for id in ids {
-            let kv = self.documents.get(rtxn, &BEU32::new(id))?
+            let kv = self
+                .documents
+                .get(rtxn, &BEU32::new(id))?
                 .with_context(|| format!("Could not find document {}", id))?;
             documents.push((id, kv));
         }
@@ -612,7 +664,8 @@ impl Index {
 
     /// Returns the index creation time.
     pub fn created_at(&self, rtxn: &RoTxn) -> heed::Result<DateTime<Utc>> {
-        let time = self.main
+        let time = self
+            .main
             .get::<_, Str, SerdeJson<DateTime<Utc>>>(rtxn, CREATED_AT_KEY)?
             .expect("Index without creation time");
         Ok(time)
@@ -620,13 +673,18 @@ impl Index {
 
     /// Returns the index last updated time.
     pub fn updated_at(&self, rtxn: &RoTxn) -> heed::Result<DateTime<Utc>> {
-        let time = self.main
+        let time = self
+            .main
             .get::<_, Str, SerdeJson<DateTime<Utc>>>(rtxn, UPDATED_AT_KEY)?
             .expect("Index without update time");
         Ok(time)
     }
 
-    pub(crate) fn set_updated_at(&self, wtxn: &mut RwTxn, time: &DateTime<Utc>) -> heed::Result<()> {
+    pub(crate) fn set_updated_at(
+        &self,
+        wtxn: &mut RwTxn,
+        time: &DateTime<Utc>,
+    ) -> heed::Result<()> {
         self.main.put::<_, Str, SerdeJson<DateTime<Utc>>>(wtxn, UPDATED_AT_KEY, &time)
     }
 }
@@ -639,8 +697,8 @@ pub(crate) mod tests {
     use maplit::hashmap;
     use tempfile::TempDir;
 
-    use crate::Index;
     use crate::update::{IndexDocuments, UpdateFormat};
+    use crate::Index;
 
     pub(crate) struct TempIndex {
         inner: Index,
@@ -663,10 +721,7 @@ pub(crate) mod tests {
             options.map_size(100 * 4096);
             let _tempdir = TempDir::new_in(".").unwrap();
             let inner = Index::new(options, _tempdir.path()).unwrap();
-            Self {
-                inner,
-                _tempdir
-            }
+            Self { inner, _tempdir }
         }
     }
 
@@ -691,10 +746,13 @@ pub(crate) mod tests {
         let rtxn = index.read_txn().unwrap();
 
         let fields_distribution = index.fields_distribution(&rtxn).unwrap();
-        assert_eq!(fields_distribution, hashmap! {
-            "id".to_string() => 2,
-            "name".to_string() => 2,
-            "age".to_string() => 1,
-        });
+        assert_eq!(
+            fields_distribution,
+            hashmap! {
+                "id".to_string() => 2,
+                "name".to_string() => 2,
+                "age".to_string() => 1,
+            }
+        );
     }
 }

@@ -1,8 +1,8 @@
 use std::iter::FromIterator;
 use std::str;
 
-use fst::Streamer;
 use crate::{Index, SmallString32};
+use fst::Streamer;
 
 pub struct WordsPrefixesFst<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -17,8 +17,7 @@ impl<'t, 'u, 'i> WordsPrefixesFst<'t, 'u, 'i> {
         wtxn: &'t mut heed::RwTxn<'i, 'u>,
         index: &'i Index,
         update_id: u64,
-    ) -> WordsPrefixesFst<'t, 'u, 'i>
-    {
+    ) -> WordsPrefixesFst<'t, 'u, 'i> {
         WordsPrefixesFst {
             wtxn,
             index,
@@ -55,7 +54,6 @@ impl<'t, 'u, 'i> WordsPrefixesFst<'t, 'u, 'i> {
 
         let mut prefix_fsts = Vec::with_capacity(self.max_prefix_length);
         for n in 1..=self.max_prefix_length {
-
             let mut current_prefix = SmallString32::new();
             let mut current_prefix_count = 0;
             let mut builder = fst::SetBuilder::memory();

@@ -27,8 +27,8 @@ fn xor_all_bits(mut x: [u8; 8]) -> [u8; 8] {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering::Less;
     use super::*;
+    use std::cmp::Ordering::Less;
 
     fn is_sorted<T: Ord>(x: &[T]) -> bool {
         x.windows(2).map(|x| x[0].cmp(&x[1])).all(|o| o == Less)
@@ -39,8 +39,8 @@ mod tests {
         let a = -13_f64;
         let b = -10.0;
         let c = -0.0;
-        let d =  1.0;
-        let e =  43.0;
+        let d = 1.0;
+        let e = 43.0;
 
         let vec: Vec<_> = [a, b, c, d, e].iter().cloned().map(f64_into_bytes).collect();
         assert!(is_sorted(&vec), "{:?}", vec);

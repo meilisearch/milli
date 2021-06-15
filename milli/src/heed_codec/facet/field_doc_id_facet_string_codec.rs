@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::convert::TryInto;
 use std::str;
 
-use crate::{FieldId, DocumentId};
+use crate::{DocumentId, FieldId};
 
 pub struct FieldDocIdFacetStringCodec;
 

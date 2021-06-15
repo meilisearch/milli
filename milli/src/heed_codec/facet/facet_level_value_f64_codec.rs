@@ -71,8 +71,8 @@ impl heed::BytesEncode<'_> for FacetLevelValueF64Codec {
 
 #[cfg(test)]
 mod tests {
-    use heed::{BytesEncode, BytesDecode};
     use super::*;
+    use heed::{BytesDecode, BytesEncode};
 
     #[test]
     fn globally_ordered_f64() {

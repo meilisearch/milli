@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use obkv::{KvReader, KvWriter};
+use std::borrow::Cow;
 
 pub struct ObkvCodec;
 

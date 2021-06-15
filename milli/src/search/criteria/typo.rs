@@ -3,17 +3,12 @@ use std::{borrow::Cow, collections::HashMap, mem::take};
 use log::debug;
 use roaring::RoaringBitmap;
 
+use super::{
+    query_docids, resolve_query_tree, Candidates, Context, Criterion, CriterionParameters,
+    CriterionResult,
+};
 use crate::search::query_tree::{maximum_typo, Operation, Query, QueryKind};
 use crate::search::{word_derivations, WordDerivationsCache};
-use super::{
-    Candidates,
-    Context,
-    Criterion,
-    CriterionParameters,
-    CriterionResult,
-    query_docids,
-    resolve_query_tree,
-};
 
 /// Maximum number of typo for a word of any length.
 const MAX_TYPOS_PER_WORD: u8 = 2;
@@ -43,7 +38,10 @@ impl<'t> Typo<'t> {
 
 impl<'t> Criterion for Typo<'t> {
     #[logging_timer::time("Typo::{}")]
-    fn next(&mut self, params: &mut CriterionParameters) -> anyhow::Result<Option<CriterionResult>> {
+    fn next(
+        &mut self,
+        params: &mut CriterionParameters,
+    ) -> anyhow::Result<Option<CriterionResult>> {
         use Candidates::{Allowed, Forbidden};
         // remove excluded candidates when next is called, instead of doing it in the loop.
         match self.state.as_mut() {
@@ -53,7 +51,8 @@ impl<'t> Criterion for Typo<'t> {
         }
 
         loop {
-            debug!("Typo at iteration {} (max typos {:?}) ({:?})",
+            debug!(
+                "Typo at iteration {} (max typos {:?}) ({:?})",
                 self.typos,
                 self.state.as_ref().map(|(mt, _, _)| mt),
                 self.state.as_ref().map(|(_, _, cd)| cd),
@@ -62,29 +61,42 @@ impl<'t> Criterion for Typo<'t> {
             match self.state.as_mut() {
                 Some((max_typos, _, _)) if self.typos > *max_typos => {
                     self.state = None; // reset state
-                },
+                }
                 Some((_, _, Allowed(allowed_candidates))) if allowed_candidates.is_empty() => {
                     self.state = None; // reset state
-                },
+                }
                 Some((_, query_tree, candidates_authorization)) => {
                     let fst = self.ctx.words_fst();
                     let new_query_tree = match self.typos {
-                        typos if typos < MAX_TYPOS_PER_WORD => {
-                            alterate_query_tree(&fst, query_tree.clone(), self.typos, params.wdcache)?
-                        },
+                        typos if typos < MAX_TYPOS_PER_WORD => alterate_query_tree(
+                            &fst,
+                            query_tree.clone(),
+                            self.typos,
+                            params.wdcache,
+                        )?,
                         MAX_TYPOS_PER_WORD => {
                             // When typos >= MAX_TYPOS_PER_WORD, no more alteration of the query tree is possible,
                             // we keep the altered query tree
-                            *query_tree = alterate_query_tree(&fst, query_tree.clone(), self.typos, params.wdcache)?;
+                            *query_tree = alterate_query_tree(
+                                &fst,
+                                query_tree.clone(),
+                                self.typos,
+                                params.wdcache,
+                            )?;
                             // we compute the allowed candidates
-                            let query_tree_allowed_candidates = resolve_query_tree(self.ctx, query_tree, params.wdcache)?;
+                            let query_tree_allowed_candidates =
+                                resolve_query_tree(self.ctx, query_tree, params.wdcache)?;
                             // we assign the allowed candidates to the candidates authorization.
                             *candidates_authorization = match take(candidates_authorization) {
-                                Allowed(allowed_candidates) => Allowed(query_tree_allowed_candidates & allowed_candidates),
-                                Forbidden(forbidden_candidates) => Allowed(query_tree_allowed_candidates - forbidden_candidates),
+                                Allowed(allowed_candidates) => {
+                                    Allowed(query_tree_allowed_candidates & allowed_candidates)
+                                }
+                                Forbidden(forbidden_candidates) => {
+                                    Allowed(query_tree_allowed_candidates - forbidden_candidates)
+                                }
                             };
                             query_tree.clone()
-                        },
+                        }
                         _otherwise => query_tree.clone(),
                     };
 
@@ -100,11 +112,11 @@ impl<'t> Criterion for Typo<'t> {
                         Allowed(allowed_candidates) => {
                             candidates &= &*allowed_candidates;
                             *allowed_candidates -= &candidates;
-                        },
+                        }
                         Forbidden(forbidden_candidates) => {
                             candidates -= &*forbidden_candidates;
                             *forbidden_candidates |= &candidates;
-                        },
+                        }
                     }
 
                     let bucket_candidates = match self.bucket_candidates.as_mut() {
@@ -120,35 +132,45 @@ impl<'t> Criterion for Typo<'t> {
                         filtered_candidates: None,
                         bucket_candidates: Some(bucket_candidates),
                     }));
-                },
-                None => {
-                    match self.parent.next(params)? {
-                        Some(CriterionResult { query_tree: Some(query_tree), candidates, filtered_candidates, bucket_candidates }) => {
-                            self.bucket_candidates = match (self.bucket_candidates.take(), bucket_candidates) {
+                }
+                None => match self.parent.next(params)? {
+                    Some(CriterionResult {
+                        query_tree: Some(query_tree),
+                        candidates,
+                        filtered_candidates,
+                        bucket_candidates,
+                    }) => {
+                        self.bucket_candidates =
+                            match (self.bucket_candidates.take(), bucket_candidates) {
                                 (Some(self_bc), Some(parent_bc)) => Some(self_bc | parent_bc),
                                 (self_bc, parent_bc) => self_bc.or(parent_bc),
                             };
 
-                            let candidates = match candidates.or(filtered_candidates) {
-                                Some(candidates) => Candidates::Allowed(candidates - params.excluded_candidates),
-                                None => Candidates::Forbidden(params.excluded_candidates.clone()),
-                            };
+                        let candidates = match candidates.or(filtered_candidates) {
+                            Some(candidates) => {
+                                Candidates::Allowed(candidates - params.excluded_candidates)
+                            }
+                            None => Candidates::Forbidden(params.excluded_candidates.clone()),
+                        };
 
-                            let maximum_typos = maximum_typo(&query_tree) as u8;
-                            self.state = Some((maximum_typos, query_tree, candidates));
-                            self.typos = 0;
-
-                        },
-                        Some(CriterionResult { query_tree: None, candidates, filtered_candidates, bucket_candidates }) => {
-                            return Ok(Some(CriterionResult {
-                                query_tree: None,
-                                candidates,
-                                filtered_candidates,
-                                bucket_candidates,
-                            }));
-                        },
-                        None => return Ok(None),
+                        let maximum_typos = maximum_typo(&query_tree) as u8;
+                        self.state = Some((maximum_typos, query_tree, candidates));
+                        self.typos = 0;
                     }
+                    Some(CriterionResult {
+                        query_tree: None,
+                        candidates,
+                        filtered_candidates,
+                        bucket_candidates,
+                    }) => {
+                        return Ok(Some(CriterionResult {
+                            query_tree: None,
+                            candidates,
+                            filtered_candidates,
+                            bucket_candidates,
+                        }));
+                    }
+                    None => return Ok(None),
                 },
             }
         }
@@ -163,21 +185,19 @@ fn alterate_query_tree(
     mut query_tree: Operation,
     number_typos: u8,
     wdcache: &mut WordDerivationsCache,
-) -> anyhow::Result<Operation>
-{
+) -> anyhow::Result<Operation> {
     fn recurse(
         words_fst: &fst::Set<Cow<[u8]>>,
         operation: &mut Operation,
         number_typos: u8,
         wdcache: &mut WordDerivationsCache,
-    ) -> anyhow::Result<()>
-    {
-        use Operation::{And, Phrase, Or};
+    ) -> anyhow::Result<()> {
+        use Operation::{And, Or, Phrase};
 
         match operation {
             And(ops) | Or(_, ops) => {
                 ops.iter_mut().try_for_each(|op| recurse(words_fst, op, number_typos, wdcache))
-            },
+            }
             // Because Phrases don't allow typos, no alteration can be done.
             Phrase(_words) => return Ok(()),
             Operation::Query(q) => {
@@ -192,19 +212,25 @@ fn alterate_query_tree(
                     } else {
                         let typo = *typo.min(&number_typos);
                         let words = word_derivations(word, q.prefix, typo, words_fst, wdcache)?;
-                        let queries = words.iter().map(|(word, typo)| {
-                            Operation::Query(Query {
-                                prefix: false,
-                                kind: QueryKind::Exact { original_typo: *typo, word: word.to_string() },
+                        let queries = words
+                            .iter()
+                            .map(|(word, typo)| {
+                                Operation::Query(Query {
+                                    prefix: false,
+                                    kind: QueryKind::Exact {
+                                        original_typo: *typo,
+                                        word: word.to_string(),
+                                    },
+                                })
                             })
-                        }).collect();
+                            .collect();
 
                         *operation = Operation::or(false, queries);
                     }
                 }
 
                 Ok(())
-            },
+            }
         }
     }
 
@@ -218,22 +244,18 @@ fn resolve_candidates<'t>(
     number_typos: u8,
     cache: &mut HashMap<(Operation, u8), RoaringBitmap>,
     wdcache: &mut WordDerivationsCache,
-) -> anyhow::Result<RoaringBitmap>
-{
+) -> anyhow::Result<RoaringBitmap> {
     fn resolve_operation<'t>(
         ctx: &'t dyn Context,
         query_tree: &Operation,
         number_typos: u8,
         cache: &mut HashMap<(Operation, u8), RoaringBitmap>,
         wdcache: &mut WordDerivationsCache,
-    ) -> anyhow::Result<RoaringBitmap>
-    {
-        use Operation::{And, Phrase, Or, Query};
+    ) -> anyhow::Result<RoaringBitmap> {
+        use Operation::{And, Or, Phrase, Query};
 
         match query_tree {
-            And(ops) => {
-                mdfs(ctx, ops, number_typos, cache, wdcache)
-            },
+            And(ops) => mdfs(ctx, ops, number_typos, cache, wdcache),
             Phrase(words) => {
                 let mut candidates = RoaringBitmap::new();
                 let mut first_loop = true;
@@ -249,12 +271,12 @@ fn resolve_candidates<'t>(
                             } else {
                                 candidates &= pair_docids;
                             }
-                        },
-                        None => return Ok(RoaringBitmap::new())
+                        }
+                        None => return Ok(RoaringBitmap::new()),
                     }
                 }
                 Ok(candidates)
-            },
+            }
             Or(_, ops) => {
                 let mut candidates = RoaringBitmap::new();
                 for op in ops {
@@ -262,12 +284,14 @@ fn resolve_candidates<'t>(
                     candidates.union_with(&docids);
                 }
                 Ok(candidates)
-            },
-            Query(q) => if q.kind.typo() == number_typos {
-                Ok(query_docids(ctx, q, wdcache)?)
-            } else {
-                Ok(RoaringBitmap::new())
-            },
+            }
+            Query(q) => {
+                if q.kind.typo() == number_typos {
+                    Ok(query_docids(ctx, q, wdcache)?)
+                } else {
+                    Ok(RoaringBitmap::new())
+                }
+            }
         }
     }
 
@@ -277,8 +301,7 @@ fn resolve_candidates<'t>(
         mana: u8,
         cache: &mut HashMap<(Operation, u8), RoaringBitmap>,
         wdcache: &mut WordDerivationsCache,
-    ) -> anyhow::Result<RoaringBitmap>
-    {
+    ) -> anyhow::Result<RoaringBitmap> {
         match branches.split_first() {
             Some((head, [])) => {
                 let cache_key = (head.clone(), mana);
@@ -289,7 +312,7 @@ fn resolve_candidates<'t>(
                     cache.insert(cache_key, candidates.clone());
                     Ok(candidates)
                 }
-            },
+            }
             Some((head, tail)) => {
                 let mut candidates = RoaringBitmap::new();
 
@@ -312,7 +335,7 @@ fn resolve_candidates<'t>(
                 }
 
                 Ok(candidates)
-            },
+            }
             None => Ok(RoaringBitmap::new()),
         }
     }
@@ -322,9 +345,9 @@ fn resolve_candidates<'t>(
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::super::initial::Initial;
     use super::super::test::TestContext;
+    use super::*;
 
     #[test]
     fn initial_placeholder_no_facets() {
@@ -347,13 +370,23 @@ mod test {
     #[test]
     fn initial_query_tree_no_facets() {
         let context = TestContext::default();
-        let query_tree = Operation::Or(false, vec![
-            Operation::And(vec![
-                Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                Operation::Query(Query { prefix: false, kind: QueryKind::tolerant(1, "world".to_string()) }),
-            ])
-        ]);
+        let query_tree = Operation::Or(
+            false,
+            vec![Operation::And(vec![
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::exact("split".to_string()),
+                }),
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::exact("this".to_string()),
+                }),
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::tolerant(1, "world".to_string()),
+                }),
+            ])],
+        );
 
         let facet_candidates = None;
 
@@ -368,13 +401,23 @@ mod test {
             & context.word_docids("this").unwrap().unwrap()
             & context.word_docids("world").unwrap().unwrap();
         let expected_1 = CriterionResult {
-            query_tree: Some(Operation::Or(false, vec![
-                Operation::And(vec![
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("world".to_string()) }),
-                ]),
-            ])),
+            query_tree: Some(Operation::Or(
+                false,
+                vec![Operation::And(vec![
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("split".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("this".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("world".to_string()),
+                    }),
+                ])],
+            )),
             candidates: Some(candidates_1.clone()),
             bucket_candidates: Some(candidates_1),
             filtered_candidates: None,
@@ -382,22 +425,37 @@ mod test {
 
         assert_eq!(criteria.next(&mut criterion_parameters).unwrap(), Some(expected_1));
 
-        let candidates_2 = (
-                context.word_docids("split").unwrap().unwrap()
-                & context.word_docids("this").unwrap().unwrap()
-                & context.word_docids("word").unwrap().unwrap()
-            ) - context.word_docids("world").unwrap().unwrap();
+        let candidates_2 = (context.word_docids("split").unwrap().unwrap()
+            & context.word_docids("this").unwrap().unwrap()
+            & context.word_docids("word").unwrap().unwrap())
+            - context.word_docids("world").unwrap().unwrap();
         let expected_2 = CriterionResult {
-            query_tree: Some(Operation::Or(false, vec![
-                Operation::And(vec![
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                    Operation::Or(false, vec![
-                        Operation::Query(Query { prefix: false, kind: QueryKind::exact_with_typo(1, "word".to_string()) }),
-                        Operation::Query(Query { prefix: false, kind: QueryKind::exact("world".to_string()) }),
-                    ]),
-                ]),
-            ])),
+            query_tree: Some(Operation::Or(
+                false,
+                vec![Operation::And(vec![
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("split".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("this".to_string()),
+                    }),
+                    Operation::Or(
+                        false,
+                        vec![
+                            Operation::Query(Query {
+                                prefix: false,
+                                kind: QueryKind::exact_with_typo(1, "word".to_string()),
+                            }),
+                            Operation::Query(Query {
+                                prefix: false,
+                                kind: QueryKind::exact("world".to_string()),
+                            }),
+                        ],
+                    ),
+                ])],
+            )),
             candidates: Some(candidates_2.clone()),
             bucket_candidates: Some(candidates_2),
             filtered_candidates: None,
@@ -436,16 +494,25 @@ mod test {
     #[test]
     fn initial_query_tree_with_facets() {
         let context = TestContext::default();
-        let query_tree = Operation::Or(false, vec![
-            Operation::And(vec![
-                Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                Operation::Query(Query { prefix: false, kind: QueryKind::tolerant(1, "world".to_string()) }),
-            ])
-        ]);
+        let query_tree = Operation::Or(
+            false,
+            vec![Operation::And(vec![
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::exact("split".to_string()),
+                }),
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::exact("this".to_string()),
+                }),
+                Operation::Query(Query {
+                    prefix: false,
+                    kind: QueryKind::tolerant(1, "world".to_string()),
+                }),
+            ])],
+        );
 
         let facet_candidates = context.word_docids("earth").unwrap().unwrap();
-
 
         let mut criterion_parameters = CriterionParameters {
             wdcache: &mut WordDerivationsCache::new(),
@@ -458,13 +525,23 @@ mod test {
             & context.word_docids("this").unwrap().unwrap()
             & context.word_docids("world").unwrap().unwrap();
         let expected_1 = CriterionResult {
-            query_tree: Some(Operation::Or(false, vec![
-                Operation::And(vec![
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("world".to_string()) }),
-                ]),
-            ])),
+            query_tree: Some(Operation::Or(
+                false,
+                vec![Operation::And(vec![
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("split".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("this".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("world".to_string()),
+                    }),
+                ])],
+            )),
             candidates: Some(&candidates_1 & &facet_candidates),
             bucket_candidates: Some(&candidates_1 & &facet_candidates),
             filtered_candidates: None,
@@ -472,22 +549,37 @@ mod test {
 
         assert_eq!(criteria.next(&mut criterion_parameters).unwrap(), Some(expected_1));
 
-        let candidates_2 = (
-                context.word_docids("split").unwrap().unwrap()
-                & context.word_docids("this").unwrap().unwrap()
-                & context.word_docids("word").unwrap().unwrap()
-            ) - context.word_docids("world").unwrap().unwrap();
+        let candidates_2 = (context.word_docids("split").unwrap().unwrap()
+            & context.word_docids("this").unwrap().unwrap()
+            & context.word_docids("word").unwrap().unwrap())
+            - context.word_docids("world").unwrap().unwrap();
         let expected_2 = CriterionResult {
-            query_tree: Some(Operation::Or(false, vec![
-                Operation::And(vec![
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("split".to_string()) }),
-                    Operation::Query(Query { prefix: false, kind: QueryKind::exact("this".to_string()) }),
-                    Operation::Or(false, vec![
-                        Operation::Query(Query { prefix: false, kind: QueryKind::exact_with_typo(1, "word".to_string()) }),
-                        Operation::Query(Query { prefix: false, kind: QueryKind::exact("world".to_string()) }),
-                    ]),
-                ]),
-            ])),
+            query_tree: Some(Operation::Or(
+                false,
+                vec![Operation::And(vec![
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("split".to_string()),
+                    }),
+                    Operation::Query(Query {
+                        prefix: false,
+                        kind: QueryKind::exact("this".to_string()),
+                    }),
+                    Operation::Or(
+                        false,
+                        vec![
+                            Operation::Query(Query {
+                                prefix: false,
+                                kind: QueryKind::exact_with_typo(1, "word".to_string()),
+                            }),
+                            Operation::Query(Query {
+                                prefix: false,
+                                kind: QueryKind::exact("world".to_string()),
+                            }),
+                        ],
+                    ),
+                ])],
+            )),
             candidates: Some(&candidates_2 & &facet_candidates),
             bucket_candidates: Some(&candidates_2 & &facet_candidates),
             filtered_candidates: None,

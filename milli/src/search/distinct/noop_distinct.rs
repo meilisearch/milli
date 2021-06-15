@@ -1,7 +1,7 @@
-use roaring::{RoaringBitmap, bitmap::IntoIter};
+use roaring::{bitmap::IntoIter, RoaringBitmap};
 
+use super::{Distinct, DocIter};
 use crate::DocumentId;
-use super::{DocIter, Distinct};
 
 /// A distinct implementer that does not perform any distinct,
 /// and simply returns an iterator to the candidates.
@@ -30,10 +30,7 @@ impl Distinct for NoopDistinct {
     type Iter = NoopDistinctIter;
 
     fn distinct(&mut self, candidates: RoaringBitmap, excluded: RoaringBitmap) -> Self::Iter {
-        NoopDistinctIter {
-            candidates: candidates.into_iter(),
-            excluded,
-        }
+        NoopDistinctIter { candidates: candidates.into_iter(), excluded }
     }
 }
 

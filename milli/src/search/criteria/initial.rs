@@ -2,14 +2,17 @@ use roaring::RoaringBitmap;
 
 use crate::search::query_tree::Operation;
 
-use super::{Criterion, CriterionResult, CriterionParameters};
+use super::{Criterion, CriterionParameters, CriterionResult};
 
 pub struct Initial {
-    answer: Option<CriterionResult>
+    answer: Option<CriterionResult>,
 }
 
 impl Initial {
-    pub fn new(query_tree: Option<Operation>, filtered_candidates: Option<RoaringBitmap>) -> Initial {
+    pub fn new(
+        query_tree: Option<Operation>,
+        filtered_candidates: Option<RoaringBitmap>,
+    ) -> Initial {
         let answer = CriterionResult {
             query_tree,
             candidates: None,

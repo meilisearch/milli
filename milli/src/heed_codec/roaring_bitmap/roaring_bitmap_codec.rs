@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use roaring::RoaringBitmap;
+use std::borrow::Cow;
 
 pub struct RoaringBitmapCodec;
 

@@ -1,14 +1,13 @@
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{Context, bail};
-use regex::Regex;
-use serde::{Serialize, Deserialize};
+use anyhow::{bail, Context};
 use once_cell::sync::Lazy;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
 
-static ASC_DESC_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(asc|desc)\(([\w_-]+)\)"#).unwrap()
-});
+static ASC_DESC_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(asc|desc)\(([\w_-]+)\)"#).unwrap());
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum Criterion {
@@ -51,7 +50,9 @@ impl FromStr for Criterion {
             "attribute" => Ok(Criterion::Attribute),
             "exactness" => Ok(Criterion::Exactness),
             text => {
-                let caps = ASC_DESC_REGEX.captures(text).with_context(|| format!("unknown criterion name: {}", text))?;
+                let caps = ASC_DESC_REGEX
+                    .captures(text)
+                    .with_context(|| format!("unknown criterion name: {}", text))?;
                 let order = caps.get(1).unwrap().as_str();
                 let field_name = caps.get(2).unwrap().as_str();
                 match order {
@@ -59,7 +60,7 @@ impl FromStr for Criterion {
                     "desc" => Ok(Criterion::Desc(field_name.to_string())),
                     otherwise => bail!("unknown criterion name: {}", otherwise),
                 }
-            },
+            }
         }
     }
 }
@@ -79,13 +80,13 @@ impl fmt::Display for Criterion {
         use Criterion::*;
 
         match self {
-            Words           => f.write_str("words"),
-            Typo            => f.write_str("typo"),
-            Proximity       => f.write_str("proximity"),
-            Attribute       => f.write_str("attribute"),
-            Exactness       => f.write_str("exactness"),
-            Asc(attr)       => write!(f, "asc({})", attr),
-            Desc(attr)      => write!(f, "desc({})", attr),
+            Words => f.write_str("words"),
+            Typo => f.write_str("typo"),
+            Proximity => f.write_str("proximity"),
+            Attribute => f.write_str("attribute"),
+            Exactness => f.write_str("exactness"),
+            Asc(attr) => write!(f, "asc({})", attr),
+            Desc(attr) => write!(f, "desc({})", attr),
         }
     }
 }

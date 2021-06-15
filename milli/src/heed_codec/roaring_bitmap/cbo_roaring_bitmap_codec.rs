@@ -75,9 +75,9 @@ impl heed::BytesEncode<'_> for CboRoaringBitmapCodec {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
-    use heed::{BytesEncode, BytesDecode};
     use super::*;
+    use heed::{BytesDecode, BytesEncode};
+    use std::iter::FromIterator;
 
     #[test]
     fn verify_encoding_decoding() {

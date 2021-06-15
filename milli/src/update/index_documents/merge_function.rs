@@ -24,11 +24,11 @@ pub fn main_merge(key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
             let mut build = fst::SetBuilder::memory();
             build.extend_stream(op.into_stream()).unwrap();
             Ok(build.into_inner().unwrap())
-        },
+        }
         FIELDS_IDS_MAP_KEY => {
             ensure!(values.windows(2).all(|vs| vs[0] == vs[1]), "fields ids map doesn't match");
             Ok(values[0].to_vec())
-        },
+        }
         DOCUMENTS_IDS_KEY => roaring_bitmap_merge(values),
         otherwise => bail!("wut {:?}", otherwise),
     }
@@ -42,29 +42,47 @@ pub fn docid_word_positions_merge(key: &[u8], _values: &[Cow<[u8]>]) -> anyhow::
     bail!("merging docid word positions is an error ({:?})", key.as_bstr())
 }
 
-pub fn field_id_docid_facet_values_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn field_id_docid_facet_values_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     let first = values.first().context("no value to merge")?;
     ensure!(values.iter().all(|v| v == first), "invalid field id docid facet value merging");
     Ok(first.to_vec())
 }
 
-pub fn words_pairs_proximities_docids_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn words_pairs_proximities_docids_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     cbo_roaring_bitmap_merge(values)
 }
 
-pub fn word_prefix_level_positions_docids_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn word_prefix_level_positions_docids_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     cbo_roaring_bitmap_merge(values)
 }
 
-pub fn word_level_position_docids_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn word_level_position_docids_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     cbo_roaring_bitmap_merge(values)
 }
 
-pub fn field_id_word_count_docids_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn field_id_word_count_docids_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     cbo_roaring_bitmap_merge(values)
 }
 
-pub fn facet_field_value_docids_merge(_key: &[u8], values: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
+pub fn facet_field_value_docids_merge(
+    _key: &[u8],
+    values: &[Cow<[u8]>],
+) -> anyhow::Result<Vec<u8>> {
     cbo_roaring_bitmap_merge(values)
 }
 

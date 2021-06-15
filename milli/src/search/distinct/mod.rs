@@ -33,9 +33,9 @@ mod test {
     use roaring::RoaringBitmap;
     use serde_json::{json, Value};
 
-    use crate::index::{Index, tests::TempIndex};
+    use crate::index::{tests::TempIndex, Index};
     use crate::update::{IndexDocumentsMethod, UpdateBuilder, UpdateFormat};
-    use crate::{BEU32, FieldId, DocumentId};
+    use crate::{DocumentId, FieldId, BEU32};
 
     static JSON: Lazy<Value> = Lazy::new(generate_json);
 
@@ -89,9 +89,7 @@ mod test {
         addition.index_documents_method(IndexDocumentsMethod::ReplaceDocuments);
         addition.update_format(UpdateFormat::Json);
 
-        addition
-            .execute(JSON.to_string().as_bytes(), |_, _| ())
-            .unwrap();
+        addition.execute(JSON.to_string().as_bytes(), |_, _| ()).unwrap();
 
         let fields_map = index.fields_ids_map(&txn).unwrap();
         let fid = fields_map.id(&distinct).unwrap();
@@ -103,13 +101,12 @@ mod test {
         (index, fid, map)
     }
 
-
     /// Checks that all the candidates are distinct, and returns the candidates number.
     pub(crate) fn validate_distinct_candidates(
-        candidates: impl Iterator<Item=anyhow::Result<DocumentId>>,
+        candidates: impl Iterator<Item = anyhow::Result<DocumentId>>,
         distinct: FieldId,
         index: &Index,
-        ) -> usize {
+    ) -> usize {
         fn test(seen: &mut HashSet<String>, value: &Value) {
             match value {
                 Value::Null | Value::Object(_) | Value::Bool(_) => (),
@@ -117,7 +114,7 @@ mod test {
                     let s = value.to_string();
                     assert!(seen.insert(s));
                 }
-                Value::Array(values) => {values.into_iter().for_each(|value| test(seen, value))}
+                Value::Array(values) => values.into_iter().for_each(|value| test(seen, value)),
             }
         }
 

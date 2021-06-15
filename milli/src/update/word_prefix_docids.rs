@@ -6,7 +6,7 @@ use grenad::CompressionType;
 use heed::types::ByteSlice;
 
 use crate::update::index_documents::WriteMethod;
-use crate::update::index_documents::{create_sorter, word_docids_merge, sorter_into_lmdb_database};
+use crate::update::index_documents::{create_sorter, sorter_into_lmdb_database, word_docids_merge};
 
 pub struct WordPrefixDocids<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -19,7 +19,10 @@ pub struct WordPrefixDocids<'t, 'u, 'i> {
 }
 
 impl<'t, 'u, 'i> WordPrefixDocids<'t, 'u, 'i> {
-    pub fn new(wtxn: &'t mut heed::RwTxn<'i, 'u>, index: &'i Index) -> WordPrefixDocids<'t, 'u, 'i> {
+    pub fn new(
+        wtxn: &'t mut heed::RwTxn<'i, 'u>,
+        index: &'i Index,
+    ) -> WordPrefixDocids<'t, 'u, 'i> {
         WordPrefixDocids {
             wtxn,
             index,

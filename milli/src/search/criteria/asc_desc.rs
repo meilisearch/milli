@@ -6,11 +6,11 @@ use log::debug;
 use ordered_float::OrderedFloat;
 use roaring::RoaringBitmap;
 
+use super::{Criterion, CriterionParameters, CriterionResult};
 use crate::search::criteria::{resolve_query_tree, CriteriaBuilder};
 use crate::search::facet::FacetIter;
 use crate::search::query_tree::Operation;
 use crate::{FieldId, Index};
-use super::{Criterion, CriterionParameters, CriterionResult};
 
 /// Threshold on the number of candidates that will make
 /// the system to choose between one algorithm or another.
@@ -79,7 +79,10 @@ impl<'t> AscDesc<'t> {
 
 impl<'t> Criterion for AscDesc<'t> {
     #[logging_timer::time("AscDesc::{}")]
-    fn next(&mut self, params: &mut CriterionParameters) -> anyhow::Result<Option<CriterionResult>> {
+    fn next(
+        &mut self,
+        params: &mut CriterionParameters,
+    ) -> anyhow::Result<Option<CriterionResult>> {
         // remove excluded candidates when next is called, instead of doing it in the loop.
         self.allowed_candidates -= params.excluded_candidates;
 
@@ -98,44 +101,47 @@ impl<'t> Criterion for AscDesc<'t> {
                         filtered_candidates: None,
                         bucket_candidates: Some(take(&mut self.bucket_candidates)),
                     }));
-                },
-                None => {
-                    match self.parent.next(params)? {
-                        Some(CriterionResult { query_tree, candidates, filtered_candidates, bucket_candidates }) => {
-                            self.query_tree = query_tree;
-                            let mut candidates = match (&self.query_tree, candidates) {
-                                (_, Some(candidates)) => candidates,
-                                (Some(qt), None) => {
-                                    let context = CriteriaBuilder::new(&self.rtxn, &self.index)?;
-                                    resolve_query_tree(&context, qt, params.wdcache)?
-                                },
-                                (None, None) => self.index.documents_ids(self.rtxn)?,
-                            };
-
-                            if let Some(filtered_candidates) = filtered_candidates {
-                                candidates &= filtered_candidates;
+                }
+                None => match self.parent.next(params)? {
+                    Some(CriterionResult {
+                        query_tree,
+                        candidates,
+                        filtered_candidates,
+                        bucket_candidates,
+                    }) => {
+                        self.query_tree = query_tree;
+                        let mut candidates = match (&self.query_tree, candidates) {
+                            (_, Some(candidates)) => candidates,
+                            (Some(qt), None) => {
+                                let context = CriteriaBuilder::new(&self.rtxn, &self.index)?;
+                                resolve_query_tree(&context, qt, params.wdcache)?
                             }
+                            (None, None) => self.index.documents_ids(self.rtxn)?,
+                        };
 
-                            match bucket_candidates {
-                                Some(bucket_candidates) => self.bucket_candidates |= bucket_candidates,
-                                None => self.bucket_candidates |= &candidates,
-                            }
+                        if let Some(filtered_candidates) = filtered_candidates {
+                            candidates &= filtered_candidates;
+                        }
 
-                            if candidates.is_empty() {
-                                continue;
-                            }
+                        match bucket_candidates {
+                            Some(bucket_candidates) => self.bucket_candidates |= bucket_candidates,
+                            None => self.bucket_candidates |= &candidates,
+                        }
 
-                            self.allowed_candidates = &candidates - params.excluded_candidates;
-                            self.candidates = facet_ordered(
-                                self.index,
-                                self.rtxn,
-                                self.field_id,
-                                self.ascending,
-                                candidates & &self.faceted_candidates,
-                            )?;
-                        },
-                        None => return Ok(None),
+                        if candidates.is_empty() {
+                            continue;
+                        }
+
+                        self.allowed_candidates = &candidates - params.excluded_candidates;
+                        self.candidates = facet_ordered(
+                            self.index,
+                            self.rtxn,
+                            self.field_id,
+                            self.ascending,
+                            candidates & &self.faceted_candidates,
+                        )?;
                     }
+                    None => return Ok(None),
                 },
                 Some(mut candidates) => {
                     candidates -= params.excluded_candidates;
@@ -167,11 +173,8 @@ fn facet_ordered<'t>(
         let iter = iterative_facet_ordered_iter(index, rtxn, field_id, ascending, candidates)?;
         Ok(Box::new(iter.map(Ok)) as Box<dyn Iterator<Item = _>>)
     } else {
-        let facet_fn = if ascending {
-            FacetIter::new_reducing
-        } else {
-            FacetIter::new_reverse_reducing
-        };
+        let facet_fn =
+            if ascending { FacetIter::new_reducing } else { FacetIter::new_reverse_reducing };
         let iter = facet_fn(rtxn, index, field_id, candidates)?;
         Ok(Box::new(iter.map(|res| res.map(|(_, docids)| docids))))
     }
@@ -191,9 +194,7 @@ fn iterative_facet_ordered_iter<'t>(
     for docid in candidates.iter() {
         let left = (field_id, docid, f64::MIN);
         let right = (field_id, docid, f64::MAX);
-        let mut iter = index
-            .field_id_docid_facet_f64s
-            .range(rtxn, &(left..=right))?;
+        let mut iter = index.field_id_docid_facet_f64s.range(rtxn, &(left..=right))?;
         let entry = if ascending { iter.next() } else { iter.last() };
         if let Some(((_, _, value), ())) = entry.transpose()? {
             docids_values.push((docid, OrderedFloat(value)));
