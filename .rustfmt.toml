@@ -1,1 +1,2 @@
 use_small_heuristics = "max"
+chain_width = 60

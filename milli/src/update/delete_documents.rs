@@ -74,8 +74,13 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         }
 
         let fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-        let primary_key = self.index.primary_key(self.wtxn)?.context("missing primary key")?;
-        let id_field = fields_ids_map.id(primary_key).expect(r#"the field "id" to be present"#);
+        let primary_key = self
+            .index
+            .primary_key(self.wtxn)?
+            .context("missing primary key")?;
+        let id_field = fields_ids_map
+            .id(primary_key)
+            .expect(r#"the field "id" to be present"#);
 
         let Index {
             env: _env,
@@ -153,7 +158,8 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             }
         }
 
-        self.index.put_fields_distribution(self.wtxn, &fields_distribution)?;
+        self.index
+            .put_fields_distribution(self.wtxn, &fields_distribution)?;
 
         // We create the FST map of the external ids that we must delete.
         external_ids.sort_unstable();
@@ -166,7 +172,8 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
 
         // We write the new external ids into the main database.
         let new_external_documents_ids = new_external_documents_ids.into_static();
-        self.index.put_external_documents_ids(self.wtxn, &new_external_documents_ids)?;
+        self.index
+            .put_external_documents_ids(self.wtxn, &new_external_documents_ids)?;
 
         // Maybe we can improve the get performance of the words
         // if we sort the words first, keeping the LMDB pages in cache.
@@ -246,7 +253,10 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             let new_words_prefixes_fst = {
                 // We retrieve the current words prefixes FST from the database.
                 let words_prefixes_fst = self.index.words_prefixes_fst(self.wtxn)?;
-                let difference = words_prefixes_fst.op().add(&prefixes_to_delete).difference();
+                let difference = words_prefixes_fst
+                    .op()
+                    .add(&prefixes_to_delete)
+                    .difference();
 
                 // We stream the new external ids that does no more contains the to-delete external ids.
                 let mut new_words_prefixes_fst_builder = fst::SetBuilder::memory();
@@ -257,7 +267,8 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             };
 
             // We write the new words prefixes FST into the main database.
-            self.index.put_words_prefixes_fst(self.wtxn, &new_words_prefixes_fst)?;
+            self.index
+                .put_words_prefixes_fst(self.wtxn, &new_words_prefixes_fst)?;
         }
 
         // We delete the documents ids from the word prefix pair proximity database docids
@@ -280,8 +291,9 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         // We delete the documents ids that are under the pairs of words,
         // it is faster and use no memory to iterate over all the words pairs than
         // to compute the cartesian product of every words of the deleted documents.
-        let mut iter =
-            word_pair_proximity_docids.remap_key_type::<ByteSlice>().iter_mut(self.wtxn)?;
+        let mut iter = word_pair_proximity_docids
+            .remap_key_type::<ByteSlice>()
+            .iter_mut(self.wtxn)?;
         while let Some(result) = iter.next() {
             let (bytes, mut docids) = result?;
             let previous_len = docids.len();
@@ -296,8 +308,9 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         drop(iter);
 
         // We delete the documents ids that are under the word level position docids.
-        let mut iter =
-            word_level_position_docids.iter_mut(self.wtxn)?.remap_key_type::<ByteSlice>();
+        let mut iter = word_level_position_docids
+            .iter_mut(self.wtxn)?
+            .remap_key_type::<ByteSlice>();
         while let Some(result) = iter.next() {
             let (bytes, mut docids) = result?;
             let previous_len = docids.len();
@@ -312,8 +325,9 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         drop(iter);
 
         // We delete the documents ids that are under the word prefix level position docids.
-        let mut iter =
-            word_prefix_level_position_docids.iter_mut(self.wtxn)?.remap_key_type::<ByteSlice>();
+        let mut iter = word_prefix_level_position_docids
+            .iter_mut(self.wtxn)?
+            .remap_key_type::<ByteSlice>();
         while let Some(result) = iter.next() {
             let (bytes, mut docids) = result?;
             let previous_len = docids.len();
@@ -357,9 +371,12 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         // Remove the documents ids from the faceted documents ids.
         for field_id in self.index.faceted_fields_ids(self.wtxn)? {
             // Remove docids from the number faceted documents ids
-            let mut docids = self.index.number_faceted_documents_ids(self.wtxn, field_id)?;
+            let mut docids = self
+                .index
+                .number_faceted_documents_ids(self.wtxn, field_id)?;
             docids.difference_with(&self.documents_ids);
-            self.index.put_number_faceted_documents_ids(self.wtxn, field_id, &docids)?;
+            self.index
+                .put_number_faceted_documents_ids(self.wtxn, field_id, &docids)?;
 
             remove_docids_from_field_id_docid_facet_value(
                 self.wtxn,
@@ -370,9 +387,12 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             )?;
 
             // Remove docids from the string faceted documents ids
-            let mut docids = self.index.string_faceted_documents_ids(self.wtxn, field_id)?;
+            let mut docids = self
+                .index
+                .string_faceted_documents_ids(self.wtxn, field_id)?;
             docids.difference_with(&self.documents_ids);
-            self.index.put_string_faceted_documents_ids(self.wtxn, field_id, &docids)?;
+            self.index
+                .put_string_faceted_documents_ids(self.wtxn, field_id, &docids)?;
 
             remove_docids_from_field_id_docid_facet_value(
                 self.wtxn,
@@ -398,8 +418,10 @@ where
     C: heed::BytesDecode<'a, DItem = K> + heed::BytesEncode<'a, EItem = K>,
     F: Fn(K) -> DocumentId,
 {
-    let mut iter =
-        db.remap_key_type::<ByteSlice>().prefix_iter_mut(wtxn, &[field_id])?.remap_key_type::<C>();
+    let mut iter = db
+        .remap_key_type::<ByteSlice>()
+        .prefix_iter_mut(wtxn, &[field_id])?
+        .remap_key_type::<C>();
 
     while let Some(result) = iter.next() {
         let (key, ()) = result?;

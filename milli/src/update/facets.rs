@@ -65,7 +65,9 @@ impl<'t, 'u, 'i> Facets<'t, 'u, 'i> {
             // Compute and store the faceted strings documents ids.
             let string_documents_ids = compute_faceted_documents_ids(
                 self.wtxn,
-                self.index.facet_id_string_docids.remap_key_type::<ByteSlice>(),
+                self.index
+                    .facet_id_string_docids
+                    .remap_key_type::<ByteSlice>(),
                 field_id,
             )?;
 

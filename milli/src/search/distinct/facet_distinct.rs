@@ -41,12 +41,16 @@ pub struct FacetDistinctIter<'a> {
 
 impl<'a> FacetDistinctIter<'a> {
     fn facet_string_docids(&self, key: &str) -> heed::Result<Option<RoaringBitmap>> {
-        self.index.facet_id_string_docids.get(self.txn, &(self.distinct, key))
+        self.index
+            .facet_id_string_docids
+            .get(self.txn, &(self.distinct, key))
     }
 
     fn facet_number_docids(&self, key: f64) -> heed::Result<Option<RoaringBitmap>> {
         // get facet docids on level 0
-        self.index.facet_id_f64_docids.get(self.txn, &(self.distinct, 0, key, key))
+        self.index
+            .facet_id_f64_docids
+            .get(self.txn, &(self.distinct, 0, key, key))
     }
 
     fn distinct_string(&mut self, id: DocumentId) -> anyhow::Result<()> {
@@ -54,8 +58,9 @@ impl<'a> FacetDistinctIter<'a> {
 
         for item in iter {
             let ((_, _, value), _) = item?;
-            let facet_docids =
-                self.facet_string_docids(value)?.expect("Corrupted data: Facet values must exist");
+            let facet_docids = self
+                .facet_string_docids(value)?
+                .expect("Corrupted data: Facet values must exist");
             self.excluded.union_with(&facet_docids);
         }
 
@@ -69,8 +74,9 @@ impl<'a> FacetDistinctIter<'a> {
 
         for item in iter {
             let ((_, _, value), _) = item?;
-            let facet_docids =
-                self.facet_number_docids(value)?.expect("Corrupted data: Facet values must exist");
+            let facet_docids = self
+                .facet_number_docids(value)?
+                .expect("Corrupted data: Facet values must exist");
             self.excluded.union_with(&facet_docids);
         }
 

@@ -89,7 +89,9 @@ mod test {
         addition.index_documents_method(IndexDocumentsMethod::ReplaceDocuments);
         addition.update_format(UpdateFormat::Json);
 
-        addition.execute(JSON.to_string().as_bytes(), |_, _| ()).unwrap();
+        addition
+            .execute(JSON.to_string().as_bytes(), |_, _| ())
+            .unwrap();
 
         let fields_map = index.fields_ids_map(&txn).unwrap();
         let fid = fields_map.id(&distinct).unwrap();

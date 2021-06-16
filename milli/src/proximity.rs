@@ -27,5 +27,7 @@ pub fn extract_position(position: Position) -> (Attribute, Position) {
 }
 
 pub fn path_proximity(path: &[Position]) -> u32 {
-    path.windows(2).map(|w| positions_proximity(w[0], w[1])).sum::<u32>()
+    path.windows(2)
+        .map(|w| positions_proximity(w[0], w[1]))
+        .sum::<u32>()
 }

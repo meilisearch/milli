@@ -27,18 +27,24 @@ impl fmt::Debug for Operation {
             match op {
                 Operation::And(children) => {
                     writeln!(f, "{:1$}AND", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+                    children
+                        .iter()
+                        .try_for_each(|c| pprint_tree(f, c, depth + 1))
                 }
                 Operation::Phrase(children) => {
                     writeln!(f, "{:2$}PHRASE {:?}", "", children, depth * 2)
                 }
                 Operation::Or(true, children) => {
                     writeln!(f, "{:1$}OR(WORD)", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+                    children
+                        .iter()
+                        .try_for_each(|c| pprint_tree(f, c, depth + 1))
                 }
                 Operation::Or(false, children) => {
                     writeln!(f, "{:1$}OR", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+                    children
+                        .iter()
+                        .try_for_each(|c| pprint_tree(f, c, depth + 1))
                 }
                 Operation::Query(query) => writeln!(f, "{:2$}{:?}", "", query, depth * 2),
             }
@@ -134,9 +140,10 @@ impl fmt::Debug for Query {
         let Query { prefix, kind } = self;
         let prefix = if *prefix { String::from("Prefix") } else { String::default() };
         match kind {
-            QueryKind::Exact { word, .. } => {
-                f.debug_struct(&(prefix + "Exact")).field("word", &word).finish()
-            }
+            QueryKind::Exact { word, .. } => f
+                .debug_struct(&(prefix + "Exact"))
+                .field("word", &word)
+                .finish(),
             QueryKind::Tolerant { typo, word } => f
                 .debug_struct(&(prefix + "Tolerant"))
                 .field("word", &word)
@@ -660,8 +667,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -693,8 +702,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -758,8 +769,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -858,8 +871,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -891,8 +906,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -930,8 +947,10 @@ mod test {
             ],
         );
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -948,8 +967,10 @@ mod test {
             Operation::Query(Query { prefix: false, kind: QueryKind::exact("wooop".to_string()) }),
         ]);
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -966,8 +987,10 @@ mod test {
             Operation::Phrase(vec!["wooop".to_string(), "wooop".to_string()]),
         ]);
 
-        let (query_tree, _) =
-            TestContext::default().build(false, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -1051,8 +1074,10 @@ mod test {
                 ),
             ],
         );
-        let (query_tree, _) =
-            TestContext::default().build(true, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(true, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -1065,8 +1090,10 @@ mod test {
         let tokens = result.tokens();
 
         let expected = Operation::Phrase(vec!["hey".to_string(), "my".to_string()]);
-        let (query_tree, _) =
-            TestContext::default().build(true, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(true, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -1136,8 +1163,10 @@ mod test {
                 ]),
             ],
         );
-        let (query_tree, _) =
-            TestContext::default().build(true, true, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(true, true, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -1168,8 +1197,10 @@ mod test {
                 }),
             ],
         );
-        let (query_tree, _) =
-            TestContext::default().build(false, false, None, tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, false, None, tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }
@@ -1186,8 +1217,10 @@ mod test {
             Operation::Query(Query { prefix: false, kind: QueryKind::exact("good".to_string()) }),
         ]);
 
-        let (query_tree, _) =
-            TestContext::default().build(false, false, Some(2), tokens).unwrap().unwrap();
+        let (query_tree, _) = TestContext::default()
+            .build(false, false, Some(2), tokens)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(expected, query_tree);
     }

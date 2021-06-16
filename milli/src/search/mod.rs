@@ -112,7 +112,9 @@ impl<'a> Search<'a> {
                 let analyzer = Analyzer::new(config);
                 let result = analyzer.analyze(query);
                 let tokens = result.tokens();
-                builder.build(tokens)?.map_or((None, None), |(qt, pq)| (Some(qt), Some(pq)))
+                builder
+                    .build(tokens)?
+                    .map_or((None, None), |(qt, pq)| (Some(qt), Some(pq)))
             }
             None => (None, None),
         };
@@ -140,7 +142,9 @@ impl<'a> Search<'a> {
             None => self.perform_sort(NoopDistinct, matching_words, criteria),
             Some(name) => {
                 let field_ids_map = self.index.fields_ids_map(self.rtxn)?;
-                let id = field_ids_map.id(name).expect("distinct not present in field map");
+                let id = field_ids_map
+                    .id(name)
+                    .expect("distinct not present in field map");
                 let distinct = FacetDistinct::new(id, self.index, self.rtxn);
                 self.perform_sort(distinct, matching_words, criteria)
             }

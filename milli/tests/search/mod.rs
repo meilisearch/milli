@@ -54,9 +54,14 @@ pub fn setup_search_index_with_criteria(criteria: &[Criterion]) -> Index {
 pub fn internal_to_external_ids(index: &Index, internal_ids: &[DocumentId]) -> Vec<String> {
     let mut rtxn = index.read_txn().unwrap();
     let docid_map = index.external_documents_ids(&mut rtxn).unwrap();
-    let docid_map: std::collections::HashMap<_, _> =
-        EXTERNAL_DOCUMENTS_IDS.iter().map(|id| (docid_map.get(id).unwrap(), id)).collect();
-    internal_ids.iter().map(|id| docid_map.get(id).unwrap().to_string()).collect()
+    let docid_map: std::collections::HashMap<_, _> = EXTERNAL_DOCUMENTS_IDS
+        .iter()
+        .map(|id| (docid_map.get(id).unwrap(), id))
+        .collect();
+    internal_ids
+        .iter()
+        .map(|id| docid_map.get(id).unwrap().to_string())
+        .collect()
 }
 
 pub fn expected_order(
@@ -64,8 +69,10 @@ pub fn expected_order(
     authorize_typo: bool,
     optional_words: bool,
 ) -> Vec<TestDocument> {
-    let dataset =
-        serde_json::Deserializer::from_str(CONTENT).into_iter().map(|r| r.unwrap()).collect();
+    let dataset = serde_json::Deserializer::from_str(CONTENT)
+        .into_iter()
+        .map(|r| r.unwrap())
+        .collect();
     let mut groups: Vec<Vec<TestDocument>> = vec![dataset];
 
     for criterion in criteria {
@@ -74,8 +81,11 @@ pub fn expected_order(
             match criterion {
                 Criterion::Attribute => {
                     group.sort_by_key(|d| d.attribute_rank);
-                    new_groups
-                        .extend(group.linear_group_by_key(|d| d.attribute_rank).map(Vec::from));
+                    new_groups.extend(
+                        group
+                            .linear_group_by_key(|d| d.attribute_rank)
+                            .map(Vec::from),
+                    );
                 }
                 Criterion::Exactness => {
                     group.sort_by_key(|d| d.exact_rank);
@@ -83,8 +93,11 @@ pub fn expected_order(
                 }
                 Criterion::Proximity => {
                     group.sort_by_key(|d| d.proximity_rank);
-                    new_groups
-                        .extend(group.linear_group_by_key(|d| d.proximity_rank).map(Vec::from));
+                    new_groups.extend(
+                        group
+                            .linear_group_by_key(|d| d.proximity_rank)
+                            .map(Vec::from),
+                    );
                 }
                 Criterion::Typo => {
                     group.sort_by_key(|d| d.typo_rank);
@@ -96,13 +109,19 @@ pub fn expected_order(
                 }
                 Criterion::Asc(field_name) if field_name == "asc_desc_rank" => {
                     group.sort_by_key(|d| d.asc_desc_rank);
-                    new_groups
-                        .extend(group.linear_group_by_key(|d| d.asc_desc_rank).map(Vec::from));
+                    new_groups.extend(
+                        group
+                            .linear_group_by_key(|d| d.asc_desc_rank)
+                            .map(Vec::from),
+                    );
                 }
                 Criterion::Desc(field_name) if field_name == "asc_desc_rank" => {
                     group.sort_by_key(|d| std::cmp::Reverse(d.asc_desc_rank));
-                    new_groups
-                        .extend(group.linear_group_by_key(|d| d.asc_desc_rank).map(Vec::from));
+                    new_groups.extend(
+                        group
+                            .linear_group_by_key(|d| d.asc_desc_rank)
+                            .map(Vec::from),
+                    );
                 }
                 Criterion::Asc(_) | Criterion::Desc(_) => new_groups.push(group.clone()),
             }
@@ -113,11 +132,23 @@ pub fn expected_order(
     if authorize_typo && optional_words {
         groups.into_iter().flatten().collect()
     } else if optional_words {
-        groups.into_iter().flatten().filter(|d| d.typo_rank == 0).collect()
+        groups
+            .into_iter()
+            .flatten()
+            .filter(|d| d.typo_rank == 0)
+            .collect()
     } else if authorize_typo {
-        groups.into_iter().flatten().filter(|d| d.word_rank == 0).collect()
+        groups
+            .into_iter()
+            .flatten()
+            .filter(|d| d.word_rank == 0)
+            .collect()
     } else {
-        groups.into_iter().flatten().filter(|d| d.word_rank == 0 && d.typo_rank == 0).collect()
+        groups
+            .into_iter()
+            .flatten()
+            .filter(|d| d.word_rank == 0 && d.typo_rank == 0)
+            .collect()
     }
 }
 

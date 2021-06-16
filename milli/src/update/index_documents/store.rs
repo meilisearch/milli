@@ -232,7 +232,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             None => {
                 let word_vec = SmallVec32::from(word.as_bytes());
                 // A newly inserted element is append at the end of the linked hash map.
-                self.word_docids.insert(word_vec, RoaringBitmap::from_iter(Some(id)));
+                self.word_docids
+                    .insert(word_vec, RoaringBitmap::from_iter(Some(id)));
                 // If the word docids just reached it's capacity we must make sure to remove
                 // one element, this way next time we insert we doesn't grow the capacity.
                 if self.word_docids.len() == self.word_docids_limit {
@@ -262,7 +263,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             }
             None => {
                 // A newly inserted element is append at the end of the linked hash map.
-                self.facet_field_number_docids.insert(key, RoaringBitmap::from_iter(Some(id)));
+                self.facet_field_number_docids
+                    .insert(key, RoaringBitmap::from_iter(Some(id)));
                 // If the word docids just reached it's capacity we must make sure to remove
                 // one element, this way next time we insert we doesn't grow the capacity.
                 if self.facet_field_number_docids.len() == self.facet_field_value_docids_limit {
@@ -296,7 +298,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             }
             None => {
                 // A newly inserted element is append at the end of the linked hash map.
-                self.facet_field_string_docids.insert(key, RoaringBitmap::from_iter(Some(id)));
+                self.facet_field_string_docids
+                    .insert(key, RoaringBitmap::from_iter(Some(id)));
                 // If the word docids just reached it's capacity we must make sure to remove
                 // one element, this way next time we insert we doesn't grow the capacity.
                 if self.facet_field_string_docids.len() == self.facet_field_value_docids_limit {
@@ -370,7 +373,8 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
             self.insert_word_docid(word, document_id)?;
         }
 
-        self.documents_writer.insert(document_id.to_be_bytes(), record)?;
+        self.documents_writer
+            .insert(document_id.to_be_bytes(), record)?;
         Self::write_docid_word_positions(
             &mut self.docid_word_positions_writer,
             document_id,
@@ -737,11 +741,13 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
         for ((fid, count), docids) in self.field_id_word_count_docids {
             docids_buffer.clear();
             CboRoaringBitmapCodec::serialize_into(&docids, &mut docids_buffer)?;
-            self.field_id_word_count_docids_sorter.insert([fid, count], &docids_buffer)?;
+            self.field_id_word_count_docids_sorter
+                .insert([fid, count], &docids_buffer)?;
         }
 
         let fst = builder.into_set();
-        self.main_sorter.insert(WORDS_FST_KEY, fst.as_fst().as_bytes())?;
+        self.main_sorter
+            .insert(WORDS_FST_KEY, fst.as_fst().as_bytes())?;
 
         let mut main_wtr = tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
         self.main_sorter.write_into(&mut main_wtr)?;
@@ -753,19 +759,23 @@ impl<'s, A: AsRef<[u8]>> Store<'s, A> {
 
         let mut word_level_position_docids_wtr =
             tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
-        self.word_level_position_docids_sorter.write_into(&mut word_level_position_docids_wtr)?;
+        self.word_level_position_docids_sorter
+            .write_into(&mut word_level_position_docids_wtr)?;
 
         let mut field_id_word_count_docids_wtr =
             tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
-        self.field_id_word_count_docids_sorter.write_into(&mut field_id_word_count_docids_wtr)?;
+        self.field_id_word_count_docids_sorter
+            .write_into(&mut field_id_word_count_docids_wtr)?;
 
         let mut facet_field_numbers_docids_wtr =
             tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
-        self.facet_field_numbers_docids_sorter.write_into(&mut facet_field_numbers_docids_wtr)?;
+        self.facet_field_numbers_docids_sorter
+            .write_into(&mut facet_field_numbers_docids_wtr)?;
 
         let mut facet_field_strings_docids_wtr =
             tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
-        self.facet_field_strings_docids_sorter.write_into(&mut facet_field_strings_docids_wtr)?;
+        self.facet_field_strings_docids_sorter
+            .write_into(&mut facet_field_strings_docids_wtr)?;
 
         let mut field_id_docid_facet_numbers_wtr =
             tempfile().and_then(|f| create_writer(comp_type, comp_level, f))?;
@@ -844,7 +854,10 @@ fn compute_words_pair_proximities(
 }
 
 fn format_count(n: usize) -> String {
-    human_format::Formatter::new().with_decimals(1).with_separator("").format(n as f64)
+    human_format::Formatter::new()
+        .with_decimals(1)
+        .with_separator("")
+        .format(n as f64)
 }
 
 fn lmdb_key_valid_size(key: &[u8]) -> bool {

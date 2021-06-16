@@ -327,7 +327,10 @@ impl<'t, 'q> QueryLevelIterator<'t, 'q> {
             }
         }
 
-        let highest = inner.iter().max_by_key(|wli| wli.level).map(|wli| wli.level);
+        let highest = inner
+            .iter()
+            .max_by_key(|wli| wli.level)
+            .map(|wli| wli.level);
         match highest {
             Some(level) => Ok(Some(Self {
                 parent: None,
@@ -474,7 +477,9 @@ fn interval_to_skip(
         .zip(current_accumulator.iter())
         .skip(already_skiped)
         .take_while(|(parent, current)| {
-            let skip_parent = parent.as_ref().map_or(true, |(_, _, docids)| docids.is_empty());
+            let skip_parent = parent
+                .as_ref()
+                .map_or(true, |(_, _, docids)| docids.is_empty());
             let skip_current = current
                 .as_ref()
                 .map_or(true, |(_, _, docids)| docids.is_disjoint(allowed_candidates));
@@ -497,7 +502,10 @@ impl<'t, 'q> Branch<'t, 'q> {
     /// and update inner interval in order to be ranked by the BinaryHeap.
     fn next(&mut self, allowed_candidates: &RoaringBitmap) -> heed::Result<bool> {
         let tree_level = self.query_level_iterator.level;
-        match self.query_level_iterator.next(allowed_candidates, tree_level)? {
+        match self
+            .query_level_iterator
+            .next(allowed_candidates, tree_level)?
+        {
             Some(last_result) => {
                 self.last_result = last_result;
                 self.tree_level = tree_level;
@@ -539,7 +547,9 @@ impl<'t, 'q> Branch<'t, 'q> {
         // we want to dig faster into levels on interesting branches.
         let level_cmp = self.tree_level.cmp(&other.tree_level).reverse();
 
-        left_cmp.then(level_cmp).then(self.last_result.2.len().cmp(&other.last_result.2.len()))
+        left_cmp
+            .then(level_cmp)
+            .then(self.last_result.2.len().cmp(&other.last_result.2.len()))
     }
 }
 
@@ -585,15 +595,15 @@ fn initialize_query_level_iterators<'t, 'q>(
         // QueryLevelIterator need to be sorted by level and folded in descending order.
         branch_positions.sort_unstable_by_key(|qli| qli.level);
         let folded_query_level_iterators =
-            branch_positions.into_iter().fold(None, |fold: Option<QueryLevelIterator>, mut qli| {
-                match fold {
+            branch_positions
+                .into_iter()
+                .fold(None, |fold: Option<QueryLevelIterator>, mut qli| match fold {
                     Some(fold) => {
                         qli.parent(fold);
                         Some(qli)
                     }
                     None => Some(qli),
-                }
-            });
+                });
 
         if let Some(mut folded_query_level_iterators) = folded_query_level_iterators {
             let tree_level = folded_query_level_iterators.level;
@@ -728,8 +738,11 @@ fn linear_compute_candidates(
                 branch_rank.sort_unstable();
                 // because several words in same query can't match all a the position 0,
                 // we substract the word index to the position.
-                let branch_rank: u64 =
-                    branch_rank.into_iter().enumerate().map(|(i, r)| r - i as u64).sum();
+                let branch_rank: u64 = branch_rank
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| r - i as u64)
+                    .sum();
                 // here we do the means of the words of the branch
                 min_rank =
                     min_rank.min(branch_rank * LCM_10_FIRST_NUMBERS as u64 / branch_len as u64);
@@ -746,20 +759,25 @@ fn linear_compute_candidates(
         words_positions: &'a HashMap<String, RoaringBitmap>,
     ) -> impl Iterator<Item = &'a RoaringBitmap> {
         let dfa = build_dfa(word, max_typo, is_prefix);
-        words_positions.iter().filter_map(move |(document_word, positions)| {
-            use levenshtein_automata::Distance;
-            match dfa.eval(document_word) {
-                Distance::Exact(_) => Some(positions),
-                Distance::AtLeast(_) => None,
-            }
-        })
+        words_positions
+            .iter()
+            .filter_map(move |(document_word, positions)| {
+                use levenshtein_automata::Distance;
+                match dfa.eval(document_word) {
+                    Distance::Exact(_) => Some(positions),
+                    Distance::AtLeast(_) => None,
+                }
+            })
     }
 
     let mut candidates = BTreeMap::new();
     for docid in allowed_candidates {
         let words_positions = ctx.docid_words_positions(docid)?;
         let rank = compute_candidate_rank(branches, words_positions);
-        candidates.entry(rank).or_insert_with(RoaringBitmap::new).insert(docid);
+        candidates
+            .entry(rank)
+            .or_insert_with(RoaringBitmap::new)
+            .insert(docid);
     }
 
     Ok(candidates)
@@ -789,7 +807,9 @@ fn flatten_query_tree(query_tree: &Operation) -> FlattenedQueryTree {
 
     fn recurse(op: &Operation) -> FlattenedQueryTree {
         match op {
-            And(ops) => ops.split_first().map_or_else(Vec::new, |(h, t)| and_recurse(h, t)),
+            And(ops) => ops
+                .split_first()
+                .map_or_else(Vec::new, |(h, t)| and_recurse(h, t)),
             Or(_, ops) => {
                 if ops.iter().all(|op| op.query().is_some()) {
                     vec![vec![ops.iter().flat_map(|op| op.query()).cloned().collect()]]

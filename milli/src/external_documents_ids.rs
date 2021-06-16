@@ -29,7 +29,11 @@ impl<'a> ExternalDocumentsIds<'a> {
 
     pub fn get<A: AsRef<[u8]>>(&self, external_id: A) -> Option<u32> {
         let external_id = external_id.as_ref();
-        match self.soft.get(external_id).or_else(|| self.hard.get(external_id)) {
+        match self
+            .soft
+            .get(external_id)
+            .or_else(|| self.hard.get(external_id))
+        {
             // u64 MAX means deleted in the soft fst map
             Some(id) if id != u64::MAX => Some(id.try_into().unwrap()),
             _otherwise => None,

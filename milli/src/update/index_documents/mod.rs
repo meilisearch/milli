@@ -593,13 +593,15 @@ impl<'t, 'u, 'i, 'a> IndexDocuments<'t, 'u, 'i, 'a> {
         self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
 
         // We write the fields distribution into the main database
-        self.index.put_fields_distribution(self.wtxn, &fields_distribution)?;
+        self.index
+            .put_fields_distribution(self.wtxn, &fields_distribution)?;
 
         // We write the primary key field id into the main database
         self.index.put_primary_key(self.wtxn, &primary_key)?;
 
         // We write the external documents ids into the main database.
-        self.index.put_external_documents_ids(self.wtxn, &external_documents_ids)?;
+        self.index
+            .put_external_documents_ids(self.wtxn, &external_documents_ids)?;
 
         // We merge the new documents ids with the existing ones.
         documents_ids.union_with(&new_documents_ids);
@@ -1021,7 +1023,10 @@ mod tests {
         assert_eq!(count, 3);
 
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
-        let (_id, obkv) = docs.iter().find(|(_id, kv)| kv.get(0) == Some(br#""kevin""#)).unwrap();
+        let (_id, obkv) = docs
+            .iter()
+            .find(|(_id, kv)| kv.get(0) == Some(br#""kevin""#))
+            .unwrap();
         let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
         drop(rtxn);
 
@@ -1039,8 +1044,10 @@ mod tests {
         assert_eq!(count, 3);
 
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
-        let (kevin_id, _) =
-            docs.iter().find(|(_, d)| d.get(0).unwrap() == br#""updated kevin""#).unwrap();
+        let (kevin_id, _) = docs
+            .iter()
+            .find(|(_, d)| d.get(0).unwrap() == br#""updated kevin""#)
+            .unwrap();
         let (id, doc) = docs[*kevin_id as usize];
         assert_eq!(id, *kevin_id);
 

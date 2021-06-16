@@ -42,7 +42,9 @@ impl<'t, 'u, 'i> WordPrefixPairProximityDocids<'t, 'u, 'i> {
     pub fn execute(self) -> anyhow::Result<()> {
         debug!("Computing and writing the word prefix pair proximity docids into LMDB on disk...");
 
-        self.index.word_prefix_pair_proximity_docids.clear(self.wtxn)?;
+        self.index
+            .word_prefix_pair_proximity_docids
+            .clear(self.wtxn)?;
 
         let prefix_fst = self.index.words_prefixes_fst(self.wtxn)?;
 
@@ -58,7 +60,10 @@ impl<'t, 'u, 'i> WordPrefixPairProximityDocids<'t, 'u, 'i> {
 
         // We insert all the word pairs corresponding to the word-prefix pairs
         // where the prefixes appears in the prefix FST previously constructed.
-        let db = self.index.word_pair_proximity_docids.remap_data_type::<ByteSlice>();
+        let db = self
+            .index
+            .word_pair_proximity_docids
+            .remap_data_type::<ByteSlice>();
         for result in db.iter(self.wtxn)? {
             let ((word1, word2, prox), data) = result?;
             let automaton = Str::new(word2).starts_with();

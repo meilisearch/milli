@@ -366,7 +366,9 @@ impl FilterCondition {
             GreaterThan(val) => (Excluded(*val), Included(f64::MAX)),
             GreaterThanOrEqual(val) => (Included(*val), Included(f64::MAX)),
             Equal(number, string) => {
-                let string_docids = strings_db.get(rtxn, &(field_id, &string))?.unwrap_or_default();
+                let string_docids = strings_db
+                    .get(rtxn, &(field_id, &string))?
+                    .unwrap_or_default();
                 let number_docids = match number {
                     Some(n) => {
                         let n = Included(*n);
@@ -472,7 +474,11 @@ fn field_id(
                     message: format!(
                         "attribute `{}` not found, available attributes are: {}",
                         key.as_str(),
-                        fields_ids_map.iter().map(|(_, n)| n).collect::<Vec<_>>().join(", "),
+                        fields_ids_map
+                            .iter()
+                            .map(|(_, n)| n)
+                            .collect::<Vec<_>>()
+                            .join(", "),
                     ),
                 },
                 key.as_span(),

@@ -50,7 +50,10 @@ pub struct Transform<'t, 'i> {
 }
 
 fn is_primary_key(field: impl AsRef<str>) -> bool {
-    field.as_ref().to_lowercase().contains(DEFAULT_PRIMARY_KEY_NAME)
+    field
+        .as_ref()
+        .to_lowercase()
+        .contains(DEFAULT_PRIMARY_KEY_NAME)
 }
 
 impl Transform<'_, '_> {
@@ -159,7 +162,10 @@ impl Transform<'_, '_> {
         for result in documents {
             let document = result?;
 
-            if self.log_every_n.map_or(false, |len| documents_count % len == 0) {
+            if self
+                .log_every_n
+                .map_or(false, |len| documents_count % len == 0)
+            {
                 progress_callback(UpdateIndexingStep::TransformFromUserIntoGenericFormat {
                     documents_seen: documents_count,
                 });
@@ -170,7 +176,9 @@ impl Transform<'_, '_> {
 
             // We prepare the fields ids map with the documents keys.
             for (key, _value) in &document {
-                fields_ids_map.insert(&key).context("field id limit reached")?;
+                fields_ids_map
+                    .insert(&key)
+                    .context("field id limit reached")?;
             }
 
             // We retrieve the user id from the document based on the primary key name,
@@ -185,7 +193,9 @@ impl Transform<'_, '_> {
                     if !self.autogenerate_docids {
                         return Err(anyhow!("missing primary key"));
                     }
-                    let uuid = uuid::Uuid::new_v4().to_hyphenated().encode_lower(&mut uuid_buffer);
+                    let uuid = uuid::Uuid::new_v4()
+                        .to_hyphenated()
+                        .encode_lower(&mut uuid_buffer);
                     Cow::Borrowed(uuid)
                 }
             };
@@ -247,7 +257,9 @@ impl Transform<'_, '_> {
         let mut fields_ids = Vec::new();
         // Generate the new fields ids based on the current fields ids and this CSV headers.
         for (i, header) in headers.iter().enumerate() {
-            let id = fields_ids_map.insert(header).context("field id limit reached)")?;
+            let id = fields_ids_map
+                .insert(header)
+                .context("field id limit reached)")?;
             fields_ids.push((id, i));
         }
 
@@ -301,7 +313,10 @@ impl Transform<'_, '_> {
             obkv_buffer.clear();
             let mut writer = obkv::KvWriter::new(&mut obkv_buffer);
 
-            if self.log_every_n.map_or(false, |len| documents_count % len == 0) {
+            if self
+                .log_every_n
+                .map_or(false, |len| documents_count % len == 0)
+            {
                 progress_callback(UpdateIndexingStep::TransformFromUserIntoGenericFormat {
                     documents_seen: documents_count,
                 });
@@ -317,7 +332,9 @@ impl Transform<'_, '_> {
                         None => return Err(anyhow!("invalid document id: {:?}", external_id)),
                     }
                 }
-                None => uuid::Uuid::new_v4().to_hyphenated().encode_lower(&mut uuid_buffer),
+                None => uuid::Uuid::new_v4()
+                    .to_hyphenated()
+                    .encode_lower(&mut uuid_buffer),
             };
 
             // When the primary_key_field_id is found in the fields ids list
@@ -397,7 +414,10 @@ impl Transform<'_, '_> {
         let mut documents_count = 0;
         let mut iter = sorter.into_iter()?;
         while let Some((external_id, update_obkv)) = iter.next()? {
-            if self.log_every_n.map_or(false, |len| documents_count % len == 0) {
+            if self
+                .log_every_n
+                .map_or(false, |len| documents_count % len == 0)
+            {
                 progress_callback(UpdateIndexingStep::ComputeIdsAndMergeDocuments {
                     documents_seen: documents_count,
                     total_documents: approximate_number_of_documents,
@@ -446,7 +466,9 @@ impl Transform<'_, '_> {
             let reader = obkv::KvReader::new(obkv);
             for (field_id, _) in reader.iter() {
                 let field_name = fields_ids_map.name(field_id).unwrap();
-                *fields_distribution.entry(field_name.to_string()).or_default() += 1;
+                *fields_distribution
+                    .entry(field_name.to_string())
+                    .or_default() += 1;
             }
         }
 
@@ -573,7 +595,9 @@ fn compute_primary_key_pair(
                     DEFAULT_PRIMARY_KEY_NAME.to_string()
                 }
             };
-            let id = fields_ids_map.insert(&name).context("field id limit reached")?;
+            let id = fields_ids_map
+                .insert(&name)
+                .context("field id limit reached")?;
             Ok((id, name))
         }
     }
@@ -581,13 +605,19 @@ fn compute_primary_key_pair(
 
 /// Only the last value associated with an id is kept.
 fn keep_latest_obkv(_key: &[u8], obkvs: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
-    obkvs.last().context("no last value").map(|last| last.clone().into_owned())
+    obkvs
+        .last()
+        .context("no last value")
+        .map(|last| last.clone().into_owned())
 }
 
 /// Merge all the obks in the order we see them.
 fn merge_obkvs(_key: &[u8], obkvs: &[Cow<[u8]>]) -> anyhow::Result<Vec<u8>> {
     let mut iter = obkvs.iter();
-    let first = iter.next().map(|b| b.clone().into_owned()).context("no first value")?;
+    let first = iter
+        .next()
+        .map(|b| b.clone().into_owned())
+        .context("no first value")?;
     Ok(iter.fold(first, |acc, current| {
         let first = obkv::KvReader::new(&acc);
         let second = obkv::KvReader::new(current);
@@ -601,7 +631,9 @@ fn validate_document_id(document_id: &str) -> Option<&str> {
     let document_id = document_id.trim();
     Some(document_id).filter(|id| {
         !id.is_empty()
-            && id.chars().all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
+            && id
+                .chars()
+                .all(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_'))
     })
 }
 

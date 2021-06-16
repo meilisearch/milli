@@ -194,7 +194,9 @@ fn iterative_facet_ordered_iter<'t>(
     for docid in candidates.iter() {
         let left = (field_id, docid, f64::MIN);
         let right = (field_id, docid, f64::MAX);
-        let mut iter = index.field_id_docid_facet_f64s.range(rtxn, &(left..=right))?;
+        let mut iter = index
+            .field_id_docid_facet_f64s
+            .range(rtxn, &(left..=right))?;
         let entry = if ascending { iter.next() } else { iter.last() };
         if let Some(((_, _, value), ())) = entry.transpose()? {
             docids_values.push((docid, OrderedFloat(value)));

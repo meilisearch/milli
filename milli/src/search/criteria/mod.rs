@@ -159,7 +159,9 @@ impl<'c> Context<'c> for CriteriaBuilder<'c> {
         proximity: u8,
     ) -> heed::Result<Option<RoaringBitmap>> {
         let key = (left, right, proximity);
-        self.index.word_prefix_pair_proximity_docids.get(self.rtxn, &key)
+        self.index
+            .word_prefix_pair_proximity_docids
+            .get(self.rtxn, &key)
     }
 
     fn words_fst<'t>(&self) -> &'t fst::Set<Cow<[u8]>> {
@@ -175,7 +177,11 @@ impl<'c> Context<'c> for CriteriaBuilder<'c> {
         docid: DocumentId,
     ) -> heed::Result<HashMap<String, RoaringBitmap>> {
         let mut words_positions = HashMap::new();
-        for result in self.index.docid_word_positions.prefix_iter(self.rtxn, &(docid, ""))? {
+        for result in self
+            .index
+            .docid_word_positions
+            .prefix_iter(self.rtxn, &(docid, ""))?
+        {
             let ((_, word), positions) = result?;
             words_positions.insert(word.to_string(), positions);
         }
@@ -515,7 +521,10 @@ pub mod test {
 
     impl<'c> Context<'c> for TestContext<'c> {
         fn documents_ids(&self) -> heed::Result<RoaringBitmap> {
-            Ok(self.word_docids.iter().fold(RoaringBitmap::new(), |acc, (_, docids)| acc | docids))
+            Ok(self
+                .word_docids
+                .iter()
+                .fold(RoaringBitmap::new(), |acc, (_, docids)| acc | docids))
         }
 
         fn word_docids(&self, word: &str) -> heed::Result<Option<RoaringBitmap>> {
@@ -699,8 +708,10 @@ pub mod test {
                     for candidate in candidates {
                         if let Some(docid_words) = docid_words.get(&candidate) {
                             let lposition = docid_words.iter().position(|w| w == lword).unwrap();
-                            let rposition =
-                                docid_words.iter().position(|w| w.starts_with(pword)).unwrap();
+                            let rposition = docid_words
+                                .iter()
+                                .position(|w| w.starts_with(pword))
+                                .unwrap();
                             let key = if lposition < rposition {
                                 (s(lword), s(pword), (rposition - lposition) as i32)
                             } else {
@@ -717,7 +728,10 @@ pub mod test {
 
             let mut keys = word_docids.keys().collect::<Vec<_>>();
             keys.sort_unstable();
-            let words_fst = fst::Set::from_iter(keys).unwrap().map_data(|v| Cow::Owned(v)).unwrap();
+            let words_fst = fst::Set::from_iter(keys)
+                .unwrap()
+                .map_data(|v| Cow::Owned(v))
+                .unwrap();
 
             TestContext {
                 words_fst,

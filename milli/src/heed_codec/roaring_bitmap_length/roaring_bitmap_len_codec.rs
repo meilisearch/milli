@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn deserialize_roaring_bitmap_length() {
-        let bitmap: RoaringBitmap = (0..500).chain(800..800_000).chain(920_056..930_032).collect();
+        let bitmap: RoaringBitmap = (0..500)
+            .chain(800..800_000)
+            .chain(920_056..930_032)
+            .collect();
         let bytes = RoaringBitmapCodec::bytes_encode(&bitmap).unwrap();
         let len = RoaringBitmapLenCodec::deserialize_from_slice(&bytes).unwrap();
         assert_eq!(bitmap.len(), len);

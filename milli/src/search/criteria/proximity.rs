@@ -303,8 +303,9 @@ fn resolve_candidates<'t>(
     ) -> anyhow::Result<Vec<(Query, Query, RoaringBitmap)>> {
         // Extract the first two elements but gives the tail
         // that is just after the first element.
-        let next =
-            branches.split_first().map(|(h1, t)| (h1, t.split_first().map(|(h2, _)| (h2, t))));
+        let next = branches
+            .split_first()
+            .map(|(h1, t)| (h1, t.split_first().map(|(h2, _)| (h2, t))));
 
         match next {
             Some((head1, Some((head2, [_])))) => {
@@ -360,8 +361,9 @@ fn resolve_plane_sweep_candidates(
             // take the inner proximity of the first group as initial
             let (_, (_, mut proximity, _)) = groups.first()?;
             let (_, (left_most_pos, _, _)) = groups.first()?;
-            let (_, (_, _, right_most_pos)) =
-                groups.iter().max_by_key(|(_, (_, _, right_most_pos))| right_most_pos)?;
+            let (_, (_, _, right_most_pos)) = groups
+                .iter()
+                .max_by_key(|(_, (_, _, right_most_pos))| right_most_pos)?;
 
             for pair in groups.windows(2) {
                 if let [(i1, (lpos1, _, rpos1)), (i2, (lpos2, prox2, rpos2))] = pair {
@@ -404,8 +406,10 @@ fn resolve_plane_sweep_candidates(
 
         let groups_len = groups_positions.len();
 
-        let mut groups_positions: Vec<_> =
-            groups_positions.into_iter().map(|pos| pos.into_iter()).collect();
+        let mut groups_positions: Vec<_> = groups_positions
+            .into_iter()
+            .map(|pos| pos.into_iter())
+            .collect();
 
         // Pop top elements of each list.
         let mut current = Vec::with_capacity(groups_len);
@@ -561,13 +565,15 @@ fn resolve_plane_sweep_candidates(
         words_positions: &'a HashMap<String, RoaringBitmap>,
     ) -> impl Iterator<Item = &'a RoaringBitmap> {
         let dfa = build_dfa(word, max_typo, is_prefix);
-        words_positions.iter().filter_map(move |(document_word, positions)| {
-            use levenshtein_automata::Distance;
-            match dfa.eval(document_word) {
-                Distance::Exact(_) => Some(positions),
-                Distance::AtLeast(_) => None,
-            }
-        })
+        words_positions
+            .iter()
+            .filter_map(move |(document_word, positions)| {
+                use levenshtein_automata::Distance;
+                match dfa.eval(document_word) {
+                    Distance::Exact(_) => Some(positions),
+                    Distance::AtLeast(_) => None,
+                }
+            })
     }
 
     let mut resolve_operation_cache = HashMap::new();
@@ -583,9 +589,16 @@ fn resolve_plane_sweep_candidates(
             &words_positions,
             wdcache,
         )?;
-        let best_proximity = positions.into_iter().min_by_key(|(_, proximity, _)| *proximity);
-        let best_proximity = best_proximity.map(|(_, proximity, _)| proximity).unwrap_or(7);
-        candidates.entry(best_proximity).or_insert_with(RoaringBitmap::new).insert(docid);
+        let best_proximity = positions
+            .into_iter()
+            .min_by_key(|(_, proximity, _)| *proximity);
+        let best_proximity = best_proximity
+            .map(|(_, proximity, _)| proximity)
+            .unwrap_or(7);
+        candidates
+            .entry(best_proximity)
+            .or_insert_with(RoaringBitmap::new)
+            .insert(docid);
     }
 
     Ok(candidates)

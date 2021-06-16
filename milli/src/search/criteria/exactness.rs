@@ -143,7 +143,9 @@ impl State {
             | Self::AttributeStartsWith(candidates)
             | Self::ExactWords(candidates) => *candidates -= lhs,
             Self::Remainings(candidates_array) => {
-                candidates_array.iter_mut().for_each(|candidates| *candidates -= lhs);
+                candidates_array
+                    .iter_mut()
+                    .for_each(|candidates| *candidates -= lhs);
                 candidates_array.retain(|candidates| !candidates.is_empty());
             }
         }

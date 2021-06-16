@@ -45,7 +45,9 @@ mod tests {
         let base = RoaringBitmap::new();
         let left = AvailableDocumentsIds::from_documents_ids(&base);
         let right = 0..=u32::max_value();
-        left.zip(right).take(500).for_each(|(l, r)| assert_eq!(l, r));
+        left.zip(right)
+            .take(500)
+            .for_each(|(l, r)| assert_eq!(l, r));
     }
 
     #[test]
@@ -58,6 +60,8 @@ mod tests {
 
         let left = AvailableDocumentsIds::from_documents_ids(&base);
         let right = (0..=u32::max_value()).filter(|&n| n != 0 && n != 10 && n != 100 && n != 405);
-        left.zip(right).take(500).for_each(|(l, r)| assert_eq!(l, r));
+        left.zip(right)
+            .take(500)
+            .for_each(|(l, r)| assert_eq!(l, r));
     }
 }

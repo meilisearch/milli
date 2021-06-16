@@ -86,7 +86,9 @@ impl<'t, 'u, 'i> WordsLevelPositions<'t, 'u, 'i> {
         )?;
 
         // We compute the word prefix level positions database.
-        self.index.word_prefix_level_position_docids.clear(self.wtxn)?;
+        self.index
+            .word_prefix_level_position_docids
+            .clear(self.wtxn)?;
 
         let mut word_prefix_level_positions_docids_sorter = create_sorter(
             word_prefix_level_positions_docids_merge,
@@ -101,7 +103,10 @@ impl<'t, 'u, 'i> WordsLevelPositions<'t, 'u, 'i> {
         // corresponds to the word-prefix level positions where the prefixes appears
         // in the prefix FST previously constructed.
         let prefix_fst = self.index.words_prefixes_fst(self.wtxn)?;
-        let db = self.index.word_level_position_docids.remap_data_type::<ByteSlice>();
+        let db = self
+            .index
+            .word_level_position_docids
+            .remap_data_type::<ByteSlice>();
         for result in db.iter(self.wtxn)? {
             let ((word, level, left, right), data) = result?;
             if level == TreeLevel::min_value() {
@@ -128,7 +133,9 @@ impl<'t, 'u, 'i> WordsLevelPositions<'t, 'u, 'i> {
 
         let entries = compute_positions_levels(
             self.wtxn,
-            self.index.word_prefix_docids.remap_data_type::<DecodeIgnore>(),
+            self.index
+                .word_prefix_docids
+                .remap_data_type::<DecodeIgnore>(),
             self.index.word_prefix_level_position_docids,
             self.chunk_compression_type,
             self.chunk_compression_level,
@@ -139,7 +146,9 @@ impl<'t, 'u, 'i> WordsLevelPositions<'t, 'u, 'i> {
 
         // The previously computed entries also defines the level 0 entries
         // so we can clear the database and append all of these entries.
-        self.index.word_prefix_level_position_docids.clear(self.wtxn)?;
+        self.index
+            .word_prefix_level_position_docids
+            .clear(self.wtxn)?;
 
         write_into_lmdb_database(
             self.wtxn,

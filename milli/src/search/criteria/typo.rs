@@ -195,9 +195,9 @@ fn alterate_query_tree(
         use Operation::{And, Or, Phrase};
 
         match operation {
-            And(ops) | Or(_, ops) => {
-                ops.iter_mut().try_for_each(|op| recurse(words_fst, op, number_typos, wdcache))
-            }
+            And(ops) | Or(_, ops) => ops
+                .iter_mut()
+                .try_for_each(|op| recurse(words_fst, op, number_typos, wdcache)),
             // Because Phrases don't allow typos, no alteration can be done.
             Phrase(_words) => return Ok(()),
             Operation::Query(q) => {
@@ -363,7 +363,12 @@ mod test {
         let parent = Initial::new(query_tree, facet_candidates);
         let mut criteria = Typo::new(&context, Box::new(parent));
 
-        assert!(criteria.next(&mut criterion_parameters).unwrap().unwrap().candidates.is_none());
+        assert!(criteria
+            .next(&mut criterion_parameters)
+            .unwrap()
+            .unwrap()
+            .candidates
+            .is_none());
         assert!(criteria.next(&mut criterion_parameters).unwrap().is_none());
     }
 

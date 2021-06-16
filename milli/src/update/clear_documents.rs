@@ -43,16 +43,22 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
 
         // We clean some of the main engine datastructures.
         self.index.put_words_fst(self.wtxn, &fst::Set::default())?;
-        self.index.put_words_prefixes_fst(self.wtxn, &fst::Set::default())?;
-        self.index.put_external_documents_ids(self.wtxn, &ExternalDocumentsIds::default())?;
-        self.index.put_documents_ids(self.wtxn, &RoaringBitmap::default())?;
-        self.index.put_fields_distribution(self.wtxn, &FieldsDistribution::default())?;
+        self.index
+            .put_words_prefixes_fst(self.wtxn, &fst::Set::default())?;
+        self.index
+            .put_external_documents_ids(self.wtxn, &ExternalDocumentsIds::default())?;
+        self.index
+            .put_documents_ids(self.wtxn, &RoaringBitmap::default())?;
+        self.index
+            .put_fields_distribution(self.wtxn, &FieldsDistribution::default())?;
 
         // We clean all the faceted documents ids.
         let empty = RoaringBitmap::default();
         for field_id in faceted_fields {
-            self.index.put_number_faceted_documents_ids(self.wtxn, field_id, &empty)?;
-            self.index.put_string_faceted_documents_ids(self.wtxn, field_id, &empty)?;
+            self.index
+                .put_number_faceted_documents_ids(self.wtxn, field_id, &empty)?;
+            self.index
+                .put_string_faceted_documents_ids(self.wtxn, field_id, &empty)?;
         }
 
         // Clear the other databases.
@@ -119,7 +125,10 @@ mod tests {
         assert!(index.docid_word_positions.is_empty(&rtxn).unwrap());
         assert!(index.word_pair_proximity_docids.is_empty(&rtxn).unwrap());
         assert!(index.field_id_word_count_docids.is_empty(&rtxn).unwrap());
-        assert!(index.word_prefix_pair_proximity_docids.is_empty(&rtxn).unwrap());
+        assert!(index
+            .word_prefix_pair_proximity_docids
+            .is_empty(&rtxn)
+            .unwrap());
         assert!(index.facet_id_f64_docids.is_empty(&rtxn).unwrap());
         assert!(index.facet_id_string_docids.is_empty(&rtxn).unwrap());
         assert!(index.field_id_docid_facet_f64s.is_empty(&rtxn).unwrap());

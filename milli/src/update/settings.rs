@@ -192,8 +192,10 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         };
 
         // There already has been a document addition, the primary key should be set by now.
-        let primary_key =
-            self.index.primary_key(&self.wtxn)?.context("Index must have a primary key")?;
+        let primary_key = self
+            .index
+            .primary_key(&self.wtxn)?
+            .context("Index must have a primary key")?;
 
         // We remap the documents fields based on the new `FieldsIdsMap`.
         let output = transform.remap_index_documents(
@@ -229,7 +231,9 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 let names: Vec<_> = fields.iter().unique().map(String::as_str).collect();
 
                 for name in names.iter() {
-                    fields_ids_map.insert(name).context("field id limit exceeded")?;
+                    fields_ids_map
+                        .insert(name)
+                        .context("field id limit exceeded")?;
                 }
                 self.index.put_displayed_fields(self.wtxn, &names)?;
                 self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
@@ -246,7 +250,9 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         match self.distinct_field {
             Setting::Set(ref attr) => {
                 let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
-                fields_ids_map.insert(attr).context("field id limit exceeded")?;
+                fields_ids_map
+                    .insert(attr)
+                    .context("field id limit exceeded")?;
 
                 self.index.put_distinct_field(self.wtxn, &attr)?;
                 self.index.put_fields_ids_map(self.wtxn, &fields_ids_map)?;
@@ -271,20 +277,29 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 
                 let mut new_fields_ids_map = FieldsIdsMap::new();
                 // fields are deduplicated, only the first occurrence is taken into account
-                let names = fields.iter().unique().map(String::as_str).collect::<Vec<_>>();
+                let names = fields
+                    .iter()
+                    .unique()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
 
                 // Add all the searchable attributes to the field map, and then add the
                 // remaining fields from the old field map to the new one
                 for name in names.iter() {
-                    new_fields_ids_map.insert(&name).context("field id limit exceeded")?;
+                    new_fields_ids_map
+                        .insert(&name)
+                        .context("field id limit exceeded")?;
                 }
 
                 for (_, name) in old_fields_ids_map.iter() {
-                    new_fields_ids_map.insert(&name).context("field id limit exceeded")?;
+                    new_fields_ids_map
+                        .insert(&name)
+                        .context("field id limit exceeded")?;
                 }
 
                 self.index.put_searchable_fields(self.wtxn, &names)?;
-                self.index.put_fields_ids_map(self.wtxn, &new_fields_ids_map)?;
+                self.index
+                    .put_fields_ids_map(self.wtxn, &new_fields_ids_map)?;
             }
             Setting::Reset => {
                 self.index.delete_searchable_fields(self.wtxn)?;
@@ -381,7 +396,9 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 let mut fields_ids_map = self.index.fields_ids_map(self.wtxn)?;
                 let mut new_facets = HashSet::new();
                 for name in fields {
-                    fields_ids_map.insert(name).context("field id limit exceeded")?;
+                    fields_ids_map
+                        .insert(name)
+                        .context("field id limit exceeded")?;
                     new_facets.insert(name.clone());
                 }
                 self.index.put_filterable_fields(self.wtxn, &new_facets)?;
@@ -403,7 +420,9 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
                 for name in fields {
                     let criterion: Criterion = name.parse()?;
                     if let Some(name) = criterion.field_name() {
-                        fields_ids_map.insert(name).context("field id limit exceeded")?;
+                        fields_ids_map
+                            .insert(name)
+                            .context("field id limit exceeded")?;
                     }
                     new_criteria.push(criterion);
                 }

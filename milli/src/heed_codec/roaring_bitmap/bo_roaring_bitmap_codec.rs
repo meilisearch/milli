@@ -27,7 +27,9 @@ impl heed::BytesEncode<'_> for BoRoaringBitmapCodec {
     fn bytes_encode(item: &Self::EItem) -> Option<Cow<[u8]>> {
         let mut out = Vec::with_capacity(item.len() as usize * size_of::<u32>());
 
-        item.iter().map(|i| i.to_ne_bytes()).for_each(|bytes| out.extend_from_slice(&bytes));
+        item.iter()
+            .map(|i| i.to_ne_bytes())
+            .for_each(|bytes| out.extend_from_slice(&bytes));
 
         Some(Cow::Owned(out))
     }

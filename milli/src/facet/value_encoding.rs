@@ -42,7 +42,11 @@ mod tests {
         let d = 1.0;
         let e = 43.0;
 
-        let vec: Vec<_> = [a, b, c, d, e].iter().cloned().map(f64_into_bytes).collect();
+        let vec: Vec<_> = [a, b, c, d, e]
+            .iter()
+            .cloned()
+            .map(f64_into_bytes)
+            .collect();
         assert!(is_sorted(&vec), "{:?}", vec);
     }
 }

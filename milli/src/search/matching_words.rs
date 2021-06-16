@@ -36,18 +36,20 @@ impl MatchingWords {
 
     /// Returns the number of matching bytes if the word matches one of the query words.
     pub fn matching_bytes(&self, word: &str) -> Option<usize> {
-        self.dfas.iter().find_map(|(dfa, query_word, typo, is_prefix)| match dfa.eval(word) {
-            Distance::Exact(t) if t <= *typo => {
-                if *is_prefix {
-                    let (_dist, len) =
-                        prefix_damerau_levenshtein(query_word.as_bytes(), word.as_bytes());
-                    Some(len)
-                } else {
-                    Some(word.len())
+        self.dfas
+            .iter()
+            .find_map(|(dfa, query_word, typo, is_prefix)| match dfa.eval(word) {
+                Distance::Exact(t) if t <= *typo => {
+                    if *is_prefix {
+                        let (_dist, len) =
+                            prefix_damerau_levenshtein(query_word.as_bytes(), word.as_bytes());
+                        Some(len)
+                    } else {
+                        Some(word.len())
+                    }
                 }
-            }
-            _otherwise => None,
-        })
+                _otherwise => None,
+            })
     }
 }
 
