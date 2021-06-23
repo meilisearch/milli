@@ -1,11 +1,10 @@
-use std::convert::TryFrom;
-use std::fs::File;
+use std::convert::{Infallible, TryFrom};
 use std::num::NonZeroU32;
 use std::{cmp, str};
 
 use fst::automaton::{self, Automaton};
 use fst::{IntoStreamer, Streamer};
-use grenad::{CompressionType, FileFuse, Reader, Writer};
+use grenad::{CompressionType, FileFuse, Reader, Sorter};
 use heed::types::{ByteSlice, DecodeIgnore, Str};
 use heed::{BytesEncode, Error};
 use log::debug;
@@ -17,7 +16,7 @@ use crate::update::index_documents::{
     cbo_roaring_bitmap_merge, create_sorter, create_writer, sorter_into_lmdb_database,
     write_into_lmdb_database, writer_into_reader, WriteMethod,
 };
-use crate::{Index, Result, TreeLevel};
+use crate::{Index, MergeFn, Result, TreeLevel};
 
 pub struct WordsLevelPositions<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -182,8 +181,14 @@ fn compute_positions_levels(
 ) -> Result<Reader<FileFuse>> {
     // It is forbidden to keep a cursor and write in a database at the same time with LMDB
     // therefore we write the facet levels entries into a grenad file before transfering them.
-    let mut writer = tempfile::tempfile()
-        .and_then(|file| create_writer(compression_type, compression_level, file))?;
+    let mut sorter = create_sorter(
+        |_, _| panic!("it is not allowed to merge two words level positions"),
+        compression_type,
+        compression_level,
+        shrink_size,
+        None,
+        None,
+    );
 
     for result in words_db.iter(rtxn)? {
         let (word, ()) = result?;
@@ -208,7 +213,7 @@ fn compute_positions_levels(
         // As specified in the documentation, we also write the level 0 entries.
         for result in words_positions_db.range(rtxn, &level_0_range)? {
             let ((word, level, left, right), docids) = result?;
-            write_level_entry(&mut writer, word, level, left, right, &docids)?;
+            write_level_entry(&mut sorter, word, level, left, right, &docids)?;
         }
 
         for (level, group_size) in group_size_iter {
@@ -227,7 +232,7 @@ fn compute_positions_levels(
                 if value > right {
                     // we found the first bound of the next group, we must store the left
                     // and right bounds associated with the docids.
-                    write_level_entry(&mut writer, word, level, left, right, &group_docids)?;
+                    write_level_entry(&mut sorter, word, level, left, right, &group_docids)?;
 
                     // We save the left bound for the new group and also reset the docids.
                     group_docids = RoaringBitmap::new();
@@ -240,16 +245,20 @@ fn compute_positions_levels(
             }
 
             if !group_docids.is_empty() {
-                write_level_entry(&mut writer, word, level, left, right, &group_docids)?;
+                write_level_entry(&mut sorter, word, level, left, right, &group_docids)?;
             }
         }
     }
+
+    let mut writer = tempfile::tempfile()
+        .and_then(|file| create_writer(compression_type, compression_level, file))?;
+    sorter.write_into(&mut writer)?;
 
     writer_into_reader(writer, shrink_size)
 }
 
 fn write_level_entry(
-    writer: &mut Writer<File>,
+    writer: &mut Sorter<MergeFn<Infallible>>,
     word: &str,
     level: TreeLevel,
     left: u32,
