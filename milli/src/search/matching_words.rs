@@ -38,8 +38,7 @@ impl MatchingWords {
             match dfa.eval(word_to_highlight) {
                 Distance::Exact(t) if t <= *typo => {
                     if *is_prefix {
-                        let len = bytes_to_highlight(word_to_highlight, query_word);
-                        Some(len)
+                        Some(bytes_to_highlight(word_to_highlight, query_word, *typo as usize))
                     } else {
                         Some(word_to_highlight.len())
                     }
@@ -107,14 +106,14 @@ impl<T> IndexMut<(usize, usize)> for N2Array<T> {
 /// typos (= 2)
 /// The algorithm is a modified
 /// [Damerau-Levenshtein](https://en.wikipedia.org/wiki/Damerau%E2%80%93Levenshtein_distance)
-fn bytes_to_highlight(source: &str, target: &str) -> usize {
+fn bytes_to_highlight(source: &str, target: &str, max_typos: usize) -> usize {
     let (n, m) = (source.chars().count(), target.chars().count());
 
     if n == 0 {
         return 0;
     }
-    // since we allow two typos we can send two characters even if it's completely wrong
-    if m < 3 {
+    // since we allow max typos we can send max typos characters even if it's completely wrong
+    if m <= max_typos {
         return source.chars().take(m).map(|c| c.len_utf8()).sum();
     }
     if n == m && source == target {
@@ -163,10 +162,10 @@ fn bytes_to_highlight(source: &str, target: &str) -> usize {
         last_row.insert(char_s, row);
     }
 
-    let mut minimum = 2;
+    let mut minimum = max_typos;
     for x in 0..=n {
         let min_dist = (0..=m).map(|y| matrix[(x + 1, y + 1)]).min().unwrap();
-        if min_dist <= 2 {
+        if min_dist <= max_typos {
             minimum = x;
         }
     }
@@ -240,7 +239,7 @@ mod tests {
         ];
 
         for test in &tests {
-            let length = bytes_to_highlight(test.query, test.text);
+            let length = bytes_to_highlight(test.query, test.text, 2);
             assert_eq!(length, test.length, r#"lenght between: "{}" "{}""#, test.query, test.text);
             assert!(
                 from_utf8(&test.query.as_bytes()[..length]).is_ok(),
@@ -249,6 +248,18 @@ mod tests {
                 length
             );
         }
+    }
+
+    #[test]
+    fn dont_highlight_too_much() {
+        let length = bytes_to_highlight("prin", "prince", 0);
+        assert_eq!(length, "prin".len());
+
+        let length = bytes_to_highlight("pri", "prince", 0);
+        assert_eq!(length, "pri".len());
+
+        let length = bytes_to_highlight("prinec", "prince", 1);
+        assert_eq!(length, "prince".len());
     }
 
     #[test]
@@ -276,9 +287,9 @@ mod tests {
         assert_eq!(matching_words.matching_bytes("word"), Some(4));
         assert_eq!(matching_words.matching_bytes("nyc"), None);
         assert_eq!(matching_words.matching_bytes("world"), Some(5));
-        assert_eq!(matching_words.matching_bytes("splitted"), Some(7));
+        assert_eq!(matching_words.matching_bytes("splitted"), Some(5));
         assert_eq!(matching_words.matching_bytes("thisnew"), None);
         assert_eq!(matching_words.matching_bytes("borld"), Some(5));
-        assert_eq!(matching_words.matching_bytes("wordsplit"), Some(5));
+        assert_eq!(matching_words.matching_bytes("wordsplit"), Some(4));
     }
 }
