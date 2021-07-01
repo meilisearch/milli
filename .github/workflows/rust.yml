@@ -1,8 +1,7 @@
 name: Rust
 
 # macos: macos-latest
-variables:
-  ubuntu: ubuntu-18.04
+# ubuntu: ubuntu-18.04
 
 on:
   push:
@@ -26,7 +25,7 @@ jobs:
           - beta
           - nightly
         include:
-          - os: ${{ ubuntu }}
+          - os: ubuntu-18.04
             sccache-path: /home/runner/.cache/sccache
           - os: macos-latest
             sccache-path: /Users/runner/Library/Caches/Mozilla.sccache
@@ -38,8 +37,8 @@ jobs:
       # SCCACHE_RECACHE: 1 # Uncomment this to clear cache, then comment it back out
     steps:
     - uses: actions/checkout@v2
-    - name: Install sccache (${{ ubuntu }})
-      if: matrix.os == ${{ ubuntu }}
+    - name: Install sccache (ubuntu-18.04)
+      if: matrix.os == ubuntu-18.04
       env:
         LINK: https://github.com/mozilla/sccache/releases/download
         SCCACHE_VERSION: 0.2.13
@@ -114,7 +113,7 @@ jobs:
 
   fmt:
     name: Run Rustfmt
-    runs-on: ${{ ubuntu }}
+    runs-on: ubuntu-18.04
     steps:
       - uses: actions/checkout@v2
       - uses: actions-rs/toolchain@v1
