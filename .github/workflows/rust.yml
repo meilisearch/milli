@@ -1,6 +1,6 @@
 name: Rust
 
-ubuntu: ubuntu-18.04
+&ubuntu ubuntu-18.04
 macos: macos-latest
 
 on:
@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [${{ ubuntu }}, macos-latest]
+        os: [*ubuntu, macos-latest]
         rust:
           - stable
           - beta
