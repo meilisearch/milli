@@ -1,7 +1,7 @@
 name: Rust
 
 # macos: macos-latest
-&ubuntu ubuntu-18.04
+os: [&ubuntu ubuntu-18.04]
 
 on:
   push:
