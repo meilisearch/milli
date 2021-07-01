@@ -1,7 +1,8 @@
 name: Rust
 
 # macos: macos-latest
-anchors: [&ubuntu ubuntu-18.04]
+variables:
+  ubuntu: ubuntu-18.04
 
 on:
   push:
@@ -19,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [*ubuntu, macos-latest]
+        os: [ ${{ ubuntu }}, macos-latest]
         rust:
           - stable
           - beta
