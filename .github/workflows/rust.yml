@@ -87,7 +87,9 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-sccache-
     - name: Start sccache server
-      run: sccache --start-server
+      run: |
+        sccache --stop-server
+        sccache --start-server
     - name: ${{ matrix.make.name }}
       run: make ${{ matrix.make.task }}
     - name: Print sccache stats
