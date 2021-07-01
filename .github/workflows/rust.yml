@@ -2,7 +2,7 @@ name: Rust
 
 # macos: macos-latest
 variables:
-  ubuntu: ubuntu-18.04
+  ubuntu: &ubuntu ubuntu-18.04
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ${ubuntu}, macos-latest]
+        os: [ *ubuntu, macos-latest]
         rust:
           - stable
           - beta
