@@ -21,11 +21,11 @@ jobs:
           - stable
           - beta
           - nightly
-    include:
-      - os: ubuntu-latest
-        sccache-path: /home/runner/.cache/sccache
-      - os: macos-latest
-        sccache-path: /Users/runner/Library/Caches/Mozilla.sccache
+        include:
+          - os: ubuntu-latest
+            sccache-path: /home/runner/.cache/sccache
+          - os: macos-latest
+            sccache-path: /Users/runner/Library/Caches/Mozilla.sccache
     env:
       RUSTC_WRAPPER: sccache
       RUSTV: ${{ matrix.rust }}
