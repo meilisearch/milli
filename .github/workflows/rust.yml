@@ -1,5 +1,8 @@
 name: Rust
 
+ubuntu: ubuntu-18.04
+macos: macos-latest
+
 on:
   push:
     branches: [ staging, trying ]
@@ -16,13 +19,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-18.04, macos-latest]
+        os: [${{ ubuntu }}, macos-latest]
         rust:
           - stable
           - beta
           - nightly
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-18.04
             sccache-path: /home/runner/.cache/sccache
           - os: macos-latest
             sccache-path: /Users/runner/Library/Caches/Mozilla.sccache
@@ -34,8 +37,8 @@ jobs:
       # SCCACHE_RECACHE: 1 # Uncomment this to clear cache, then comment it back out
     steps:
     - uses: actions/checkout@v2
-    - name: Install sccache (ubuntu-latest)
-      if: matrix.os == 'ubuntu-latest'
+    - name: Install sccache (${{ ubuntu }})
+      if: matrix.os == ${{ ubuntu }}
       env:
         LINK: https://github.com/mozilla/sccache/releases/download
         SCCACHE_VERSION: 0.2.13
