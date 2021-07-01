@@ -38,7 +38,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Install sccache (ubuntu-18.04)
-      if: matrix.os == ubuntu-18.04
+      if: matrix.os == "ubuntu-18.04"
       env:
         LINK: https://github.com/mozilla/sccache/releases/download
         SCCACHE_VERSION: 0.2.13
