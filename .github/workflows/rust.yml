@@ -129,3 +129,5 @@ jobs:
         run: |
           echo -ne "\n" > benchmarks/benches/datasets_paths.rs
           cargo fmt --all -- --check
+
+# rerun the ci
