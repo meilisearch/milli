@@ -55,7 +55,7 @@ jobs:
         brew install sccache
     - name: Start sccache server
       run: |
-        sccache --stop-server
+        sccache --stop-server || true
         sccache --start-server
     - uses: actions-rs/toolchain@v1
       with:
