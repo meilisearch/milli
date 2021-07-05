@@ -53,6 +53,10 @@ jobs:
       run: |
         brew update
         brew install sccache
+    - name: Start sccache server
+      run: |
+        sccache --stop-server
+        sccache --start-server
     - uses: actions-rs/toolchain@v1
       with:
         profile: minimal
@@ -86,12 +90,6 @@ jobs:
         key: ${{ runner.os }}-sccache-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-sccache-
-    - name: Start sccache server
-      run: |
-        sccache --stop-server
-        sccache --start-server
-    - name: ${{ matrix.make.name }}
-      run: make ${{ matrix.make.task }}
     - name: Print sccache stats
       run: sccache --show-stats
     - name: Stop sccache server
