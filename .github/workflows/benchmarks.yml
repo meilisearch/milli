@@ -7,6 +7,13 @@ on:
         description: 'The name of the dataset used to benchmark (songs, wiki or indexing)'
         required: false
         default: 'songs'
+  pull_request:
+    branches: [ main ]
+    inputs:
+      dataset_name:
+        description: 'The name of the dataset used to benchmark (songs, wiki or indexing)'
+        required: false
+        default: 'songs'
 
 env:
   HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no HOME defined
