@@ -453,7 +453,7 @@ where
 
 fn remove_docids_from_facet_field_id_string_docids<'a, C>(
     wtxn: &'a mut heed::RwTxn,
-    db: &heed::Database<C, FacetStringLevelZeroValueCodec<CboRoaringBitmapCodec>>,
+    db: &heed::Database<C, FacetStringLevelZeroValueCodec>,
     to_remove: &RoaringBitmap,
 ) -> heed::Result<()>
 where
