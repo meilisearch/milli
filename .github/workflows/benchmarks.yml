@@ -7,9 +7,17 @@ on:
         description: 'The name of the dataset used to benchmark (search_songs, search_wiki or indexing)'
         required: false
         default: 'search_songs'
+  schedule:
+    - cron: "0 12 * * FRI" # every friday at 12:00PM
+      env:
+        CRON_BENCH_NAME: 'search_songs'
+  push:
+      env:
+        CRON_BENCH_NAME: 'search_songs'
 
 env:
   HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no $HOME defined
+  BENCH_NAME:
 
 jobs:
   benchmarks:
@@ -36,16 +44,20 @@ jobs:
         shell: bash
         run: echo "##[set-output name=short;]$(echo $GITHUB_SHA | cut -c1-8)"
         id: commit_sha
+      - name: Set benchmark name
+        shell: bash
+        run: echo "##[set-output name=name;]$(if [[ -r ${{ github.event.inputs.dataset_name }} ]]; then; echo ${{ github.event.inputs.dataset_name }} ; else ; echo $CRON_BENCH_NAME ; fi)"
+        id: bench_name
       - name: Set file basename with format "dataset_branch_commitSHA"
         shell: bash
-        run: echo "##[set-output name=basename;]$(echo ${{ github.event.inputs.dataset_name }}_${{ steps.normalized_current_branch.outputs.name }}_${{ steps.commit_sha.outputs.short }})"
+        run: echo "##[set-output name=basename;]$(echo ${{ steps.bench_name.outputs.name }}_${{ steps.normalized_current_branch.outputs.name }}_${{ steps.commit_sha.outputs.short }})"
         id: file
 
       # Run benchmarks
-      - name: Run benchmarks - Dataset ${{ github.event.inputs.dataset_name }} - Branch ${{ steps.current_branch.outputs.name }} - Commit ${{ steps.commit_sha.outputs.short }}
+      - name: Run benchmarks - Dataset ${{ steps.bench_name.outputs.name }} - Branch ${{ steps.current_branch.outputs.name }} - Commit ${{ steps.commit_sha.outputs.short }}
         run: |
           cd benchmarks
-          cargo bench --bench ${{ github.event.inputs.dataset_name }} -- --save-baseline ${{ steps.file.outputs.basename }}
+          cargo bench --bench ${{ steps.bench_name.outputs.name }} -- --save-baseline ${{ steps.file.outputs.basename }}
 
       # Generate critcmp files
       - name: Install critcmp
