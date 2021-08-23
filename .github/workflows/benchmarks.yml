@@ -45,7 +45,7 @@ jobs:
         id: commit_sha
       - name: Set benchmark name
         shell: bash
-        run: echo "##[set-output name=name;]$(if [[ -z \"${{ github.event.inputs.dataset_name }}\" ]]; then; echo ${{ github.event.inputs.dataset_name }} ; else ; echo $CRON_BENCH_NAME ; fi)"
+        run: echo "##[set-output name=name;]$(if [[ ${{ github.event.inputs.dataset_name }} ]]; then; echo ${{ github.event.inputs.dataset_name }} ; else ; echo $CRON_BENCH_NAME ; fi)"
         id: bench_name
       - name: Set file basename with format "dataset_branch_commitSHA"
         shell: bash
