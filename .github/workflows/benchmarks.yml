@@ -12,7 +12,7 @@ on:
       env:
         CRON_BENCH_NAME: 'search_songs'
   push:
-    run: |
+    - run: |
       echo 'cron_bench_name=seach_songs' >> $GITHUB_ENV
 
 env:
