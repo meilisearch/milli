@@ -12,7 +12,8 @@ on:
       env:
         CRON_BENCH_NAME: 'search_songs'
   push:
-    run: echo 'cron_bench_name=seach_songs' >> $GITHUB_ENV
+    run: |
+      echo 'cron_bench_name=seach_songs' >> $GITHUB_ENV
 
 env:
   HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no $HOME defined
