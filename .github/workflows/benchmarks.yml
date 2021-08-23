@@ -18,7 +18,7 @@ on:
 env:
   HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no $HOME defined
   INPUT_BENCH_NAME: ${{ github.event.inputs.dataset_name }}
-  CRON_BENCH_NAME: ${{ env.cron_bench_name }}
+  CRON_BENCH_NAME: ${{ date +'%A' }}
 
 jobs:
   benchmarks:
