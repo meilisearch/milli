@@ -12,6 +12,8 @@ on:
       env:
         CRON_BENCH_NAME: 'search_songs'
   push:
+    inputs:
+      dataset_name: 'search_songs'
       env:
         CRON_BENCH_NAME: 'search_songs'
 
