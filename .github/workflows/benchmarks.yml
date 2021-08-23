@@ -12,8 +12,9 @@ on:
       env:
         CRON_BENCH_NAME: 'search_songs'
   push:
-    env:
-      CRON_BENCH_NAME: 'search_songs'
+    - name: Set env var
+      shell: bash
+      run: export CRON_BENCH_NAME=seach_songs
 
 env:
   HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no $HOME defined
