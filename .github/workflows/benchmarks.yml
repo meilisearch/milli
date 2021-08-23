@@ -9,16 +9,11 @@ on:
         default: 'search_songs'
   schedule:
     - cron: "0 12 * * FRI" # every friday at 12:00PM
-      env:
-        CRON_BENCH_NAME: 'search_songs'
   push:
-    - run: |
-      echo 'cron_bench_name=seach_songs' >> $GITHUB_ENV
 
 env:
-  HOME: "/home/runner" # The actions-rs/toolchain@v1 can fail we have no $HOME defined
   INPUT_BENCH_NAME: ${{ github.event.inputs.dataset_name }}
-  CRON_BENCH_NAME: ${{ date +'%A' }}
+  CRON_BENCH_NAME: ${{ date +'%A' }} # TODO if it’s monday then : bench_songs, etc...
 
 jobs:
   benchmarks:
