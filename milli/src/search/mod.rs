@@ -206,6 +206,13 @@ impl<'a> Search<'a> {
         let mut initial_candidates = RoaringBitmap::new();
         let mut excluded_candidates = RoaringBitmap::new();
         let mut documents_ids = Vec::new();
+        let before = Instant::now();
+        let time_diff = dbg!(std::env::var("MILLI_BETA_MAX_SEARCH_TIME")
+            .ok()
+            .map(|time_diff| std::time::Duration::from_millis(time_diff.parse().unwrap())));
+        let fill_with_unsorted = dbg!(std::env::var("MILLI_BETA_FILL_WITH_UNRANKED")
+            .ok()
+            .map_or(false, |s| s == "true"));
 
         while let Some(FinalResult { candidates, bucket_candidates, .. }) =
             criteria.next(&excluded_candidates)?
@@ -229,6 +236,22 @@ impl<'a> Search<'a> {
             if documents_ids.len() == self.limit {
                 break;
             }
+
+            if time_diff.map_or(false, |time_diff| {
+                !documents_ids.is_empty() && before + time_diff < Instant::now()
+            }) {
+                if fill_with_unsorted {
+                    let mut candidates = distinct.distinct(
+                        initial_candidates.iter().take(self.limit).collect(),
+                        candidates.into_excluded(),
+                    );
+                    for candidate in candidates.by_ref().take(self.limit - documents_ids.len()) {
+                        documents_ids.push(candidate?);
+                    }
+                }
+                break;
+            }
+
             excluded_candidates = candidates.into_excluded();
         }
 
