@@ -60,7 +60,6 @@ pub enum UserError {
     InvalidFacetsDistribution { invalid_facets_name: HashSet<String> },
     InvalidGeoField { document_id: Value, object: Value },
     InvalidFilter { input: String },
-    InvalidSortName { name: String },
     InvalidSortableAttribute { field: String, valid_fields: HashSet<String> },
     SortRankingRuleMissing,
     InvalidStoreFile,
@@ -234,9 +233,6 @@ a document id can be of type integer or string \
 only composed of alphanumeric characters (a-z A-Z 0-9), hyphens (-) and underscores (_)",
                     json
                 )
-            }
-            Self::InvalidSortName { name } => {
-                write!(f, "Invalid syntax for the sort parameter: {}", name)
             }
             Self::InvalidSortableAttribute { field, valid_fields } => {
                 let valid_names =
