@@ -12,7 +12,7 @@ use crate::{Index, Result};
 type IsOptionalWord = bool;
 type IsPrefix = bool;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Operation {
     And(Vec<Operation>),
     // serie of consecutive non prefix and exact words
@@ -21,32 +21,32 @@ pub enum Operation {
     Query(Query),
 }
 
-impl fmt::Debug for Operation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fn pprint_tree(f: &mut fmt::Formatter<'_>, op: &Operation, depth: usize) -> fmt::Result {
-            match op {
-                Operation::And(children) => {
-                    writeln!(f, "{:1$}AND", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
-                }
-                Operation::Phrase(children) => {
-                    writeln!(f, "{:2$}PHRASE {:?}", "", children, depth * 2)
-                }
-                Operation::Or(true, children) => {
-                    writeln!(f, "{:1$}OR(WORD)", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
-                }
-                Operation::Or(false, children) => {
-                    writeln!(f, "{:1$}OR", "", depth * 2)?;
-                    children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
-                }
-                Operation::Query(query) => writeln!(f, "{:2$}{:?}", "", query, depth * 2),
-            }
-        }
-
-        pprint_tree(f, self, 0)
-    }
-}
+// impl fmt::Debug for Operation {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         fn pprint_tree(f: &mut fmt::Formatter<'_>, op: &Operation, depth: usize) -> fmt::Result {
+//             match op {
+//                 Operation::And(children) => {
+//                     writeln!(f, "{:1$}AND", "", depth * 2)?;
+//                     children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+//                 }
+//                 Operation::Phrase(children) => {
+//                     writeln!(f, "{:2$}PHRASE {:?}", "", children, depth * 2)
+//                 }
+//                 Operation::Or(true, children) => {
+//                     writeln!(f, "{:1$}OR(WORD)", "", depth * 2)?;
+//                     children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+//                 }
+//                 Operation::Or(false, children) => {
+//                     writeln!(f, "{:1$}OR", "", depth * 2)?;
+//                     children.iter().try_for_each(|c| pprint_tree(f, c, depth + 1))
+//                 }
+//                 Operation::Query(query) => writeln!(f, "{:2$}{:?}", "", query, depth * 2),
+//             }
+//         }
+//
+//         pprint_tree(f, self, 0)
+//     }
+// }
 
 impl Operation {
     fn and(mut ops: Vec<Self>) -> Self {
@@ -365,7 +365,10 @@ fn create_query_tree(
                                 .collect();
                             let mut operations = synonyms(ctx, &words)?.unwrap_or_default();
                             let concat = words.concat();
-                            let query = Query { prefix: is_prefix, kind: typos(concat, true, 1) };
+                            let query = Query {
+                                prefix: is_prefix,
+                                kind: typos(concat, authorize_typos, 1),
+                            };
                             operations.push(Operation::Query(query));
                             and_op_children.push(Operation::or(false, operations));
                         }
@@ -657,7 +660,7 @@ mod test {
                 ]),
                 Operation::Query(Query {
                     prefix: true,
-                    kind: QueryKind::tolerant(2, "heyfriends".to_string()),
+                    kind: QueryKind::tolerant(1, "heyfriends".to_string()),
                 }),
             ],
         );
@@ -690,7 +693,7 @@ mod test {
                 ]),
                 Operation::Query(Query {
                     prefix: false,
-                    kind: QueryKind::tolerant(2, "heyfriends".to_string()),
+                    kind: QueryKind::tolerant(1, "heyfriends".to_string()),
                 }),
             ],
         );
@@ -755,7 +758,7 @@ mod test {
                 ]),
                 Operation::Query(Query {
                     prefix: false,
-                    kind: QueryKind::tolerant(2, "helloworld".to_string()),
+                    kind: QueryKind::tolerant(1, "helloworld".to_string()),
                 }),
             ],
         );
@@ -853,7 +856,7 @@ mod test {
                         ]),
                         Operation::Query(Query {
                             prefix: false,
-                            kind: QueryKind::tolerant(2, "newyorkcity".to_string()),
+                            kind: QueryKind::tolerant(1, "newyorkcity".to_string()),
                         }),
                     ],
                 ),
@@ -927,7 +930,7 @@ mod test {
                 ]),
                 Operation::Query(Query {
                     prefix: false,
-                    kind: QueryKind::tolerant(2, "wordsplitfish".to_string()),
+                    kind: QueryKind::tolerant(1, "wordsplitfish".to_string()),
                 }),
             ],
         );
@@ -1047,7 +1050,7 @@ mod test {
                         ]),
                         Operation::Query(Query {
                             prefix: false,
-                            kind: QueryKind::tolerant(2, "heymyfriend".to_string()),
+                            kind: QueryKind::tolerant(1, "heymyfriend".to_string()),
                         }),
                     ],
                 ),
