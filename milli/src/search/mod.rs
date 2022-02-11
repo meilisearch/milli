@@ -44,6 +44,7 @@ pub struct Search<'a> {
     words_limit: usize,
     rtxn: &'a heed::RoTxn<'a>,
     index: &'a Index,
+    user: Option<String>,
 }
 
 impl<'a> Search<'a> {
@@ -59,11 +60,17 @@ impl<'a> Search<'a> {
             words_limit: 10,
             rtxn,
             index,
+            user: None,
         }
     }
 
     pub fn query(&mut self, query: impl Into<String>) -> &mut Search<'a> {
         self.query = Some(query.into());
+        self
+    }
+
+    pub fn with_user(&mut self, user: String) -> &mut Search<'a> {
+        self.user.replace(user);
         self
     }
 
@@ -133,6 +140,27 @@ impl<'a> Search<'a> {
         let filtered_candidates = match &self.filter {
             Some(condition) => Some(condition.evaluate(self.rtxn, self.index)?),
             None => None,
+        };
+
+        let filtered_candidates = match (filtered_candidates, &self.user) {
+            (Some(mut filtered), Some(ref user)) => {
+                match self.index.get_user_filter(self.rtxn, user)? {
+                    Some(ids) => {
+                        filtered |= ids;
+                        Some(filtered)
+                    }
+                    // user is not allowed to see any document
+                    None => return Ok(SearchResult::default()),
+                }
+            }
+            (None, Some(ref user)) => {
+                match self.index.get_user_filter(self.rtxn, user)? {
+                    Some(ids) => Some(ids),
+                    // user is not allowed to see any document
+                    None => return Ok(SearchResult::default()),
+                }
+            }
+            (filtered, _) => filtered,
         };
 
         debug!("facet candidates: {:?} took {:.02?}", filtered_candidates, before.elapsed());
@@ -249,6 +277,7 @@ impl fmt::Debug for Search<'_> {
             words_limit,
             rtxn: _,
             index: _,
+            user: _,
         } = self;
         f.debug_struct("Search")
             .field("query", query)

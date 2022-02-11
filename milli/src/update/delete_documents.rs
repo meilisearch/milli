@@ -120,6 +120,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             field_id_docid_facet_f64s,
             field_id_docid_facet_strings,
             documents,
+            users: _,
         } = self.index;
 
         // Number of fields for each document that has been deleted.

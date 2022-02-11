@@ -31,6 +31,7 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
             field_id_docid_facet_f64s,
             field_id_docid_facet_strings,
             documents,
+            users: _,
         } = self.index;
 
         // We retrieve the number of documents ids that we are deleting.

@@ -16,6 +16,7 @@ use crate::heed_codec::facet::{
     FacetLevelValueF64Codec, FacetStringLevelZeroCodec, FacetStringLevelZeroValueCodec,
     FieldDocIdFacetF64Codec, FieldDocIdFacetStringCodec,
 };
+use crate::update::AvailableDocumentsIds;
 use crate::{
     default_criteria, BEU32StrCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec, Criterion,
     DocumentId, ExternalDocumentsIds, FacetDistribution, FieldDistribution, FieldId,
@@ -63,6 +64,7 @@ pub mod db_name {
     pub const FIELD_ID_DOCID_FACET_F64S: &str = "field-id-docid-facet-f64s";
     pub const FIELD_ID_DOCID_FACET_STRINGS: &str = "field-id-docid-facet-strings";
     pub const DOCUMENTS: &str = "documents";
+    pub const USERS: &str = "users";
 }
 
 #[derive(Clone)]
@@ -105,13 +107,16 @@ pub struct Index {
 
     /// Maps the document id to the document as an obkv store.
     pub documents: Database<OwnedType<BEU32>, ObkvCodec>,
+
+    /// custom user filters
+    pub users: Database<Str, CboRoaringBitmapCodec>,
 }
 
 impl Index {
     pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> Result<Index> {
         use db_name::*;
 
-        options.max_dbs(14);
+        options.max_dbs(15);
         unsafe { options.flag(Flags::MdbAlwaysFreePages) };
 
         let env = options.open(path)?;
@@ -131,6 +136,7 @@ impl Index {
         let field_id_docid_facet_strings =
             env.create_database(Some(FIELD_ID_DOCID_FACET_STRINGS))?;
         let documents = env.create_database(Some(DOCUMENTS))?;
+        let users = env.create_database(Some(USERS))?;
 
         Index::initialize_creation_dates(&env, main)?;
 
@@ -150,6 +156,7 @@ impl Index {
             field_id_docid_facet_f64s,
             field_id_docid_facet_strings,
             documents,
+            users,
         })
     }
 
@@ -856,6 +863,56 @@ impl Index {
         time: &DateTime<Utc>,
     ) -> heed::Result<()> {
         self.main.put::<_, Str, SerdeJson<DateTime<Utc>>>(wtxn, main_key::UPDATED_AT_KEY, &time)
+    }
+
+    // user management
+    pub fn user_add_document_filter(
+        &self,
+        wtxn: &mut RwTxn,
+        user: &str,
+        mut docids: Vec<String>,
+    ) -> Result<()> {
+        docids.sort_unstable();
+        let mut external_documents_ids = self.external_documents_ids(wtxn)?;
+        let mut new_docids = fst::MapBuilder::memory();
+        let mut bitmap = RoaringBitmap::new();
+        let documents_ids = self.documents_ids(wtxn)?;
+        let mut available_documents_ids = AvailableDocumentsIds::from_documents_ids(&documents_ids);
+        for id in docids {
+            match external_documents_ids.get(&id) {
+                Some(id) => {
+                    bitmap.insert(id);
+                }
+                None => {
+                    let next = available_documents_ids.next().unwrap();
+                    bitmap.insert(next);
+                    new_docids.insert(id, next as u64)?;
+                }
+            }
+        }
+
+        let new_docids = new_docids.into_map();
+
+        external_documents_ids.insert_ids(&new_docids)?;
+        let external_documents_ids = external_documents_ids.into_static();
+
+        self.put_external_documents_ids(wtxn, &external_documents_ids)?;
+
+        let new_filter = match self.users.get(wtxn, user)? {
+            Some(mut filter) => {
+                filter |= bitmap;
+                filter
+            }
+            None => bitmap,
+        };
+        self.users.put(wtxn, user, &new_filter)?;
+
+        Ok(())
+    }
+
+    // user management
+    pub fn get_user_filter(&self, txn: &RoTxn, user: &str) -> Result<Option<RoaringBitmap>> {
+        Ok(self.users.get(txn, user)?)
     }
 }
 
