@@ -23,7 +23,7 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "Milli CLI", about = "A simple CLI to manipulate a milli index.")]
 struct Cli {
-    #[structopt(short, long)]
+    #[structopt(short, long, default_value = ".")]
     index_path: PathBuf,
     #[structopt(short = "s", long, default_value = "100GiB")]
     index_size: Byte,
@@ -61,9 +61,22 @@ impl Performer for Command {
 enum Settings {
     Update(SettingsUpdate),
     Show,
+    User {
+        #[structopt(long)]
+        name: String,
+        #[structopt(long)]
+        ids: Vec<String>,
+    },
 }
 
 impl Settings {
+    fn add_user_docids(index: &Index, name: String, ids: Vec<String>) -> Result<()> {
+        let mut txn = index.write_txn()?;
+        index.user_add_document_filter(&mut txn, &name, ids)?;
+        txn.commit()?;
+        Ok(())
+    }
+
     fn show(&self, index: Index) -> Result<()> {
         let txn = index.read_txn()?;
         let displayed_attributes = index
@@ -119,6 +132,7 @@ impl Performer for Settings {
         match self {
             Settings::Update(update) => update.perform(index),
             Settings::Show => self.show(index),
+            Settings::User { name, ids } => Self::add_user_docids(&index, name, ids),
         }
     }
 }
@@ -348,6 +362,8 @@ struct Search {
     limit: Option<usize>,
     #[structopt(short, long, conflicts_with = "query")]
     interactive: bool,
+    #[structopt(short, long)]
+    user: Option<String>,
 }
 
 impl Performer for Search {
@@ -361,13 +377,7 @@ impl Performer for Search {
                 match lines.next() {
                     Some(Ok(line)) => {
                         let now = Instant::now();
-                        let jsons = Self::perform_single_search(
-                            &index,
-                            &Some(line),
-                            &self.filter,
-                            &self.offset,
-                            &self.limit,
-                        )?;
+                        let jsons = self.perform_single_search(&index, &Some(line))?;
 
                         let time = now.elapsed();
 
@@ -381,13 +391,7 @@ impl Performer for Search {
             }
         } else {
             let now = Instant::now();
-            let jsons = Self::perform_single_search(
-                &index,
-                &self.query,
-                &self.filter,
-                &self.offset,
-                &self.limit,
-            )?;
+            let jsons = self.perform_single_search(&index, &self.query)?;
 
             let time = now.elapsed();
 
@@ -403,11 +407,9 @@ impl Performer for Search {
 
 impl Search {
     fn perform_single_search(
+        &self,
         index: &milli::Index,
         query: &Option<String>,
-        filter: &Option<String>,
-        offset: &Option<usize>,
-        limit: &Option<usize>,
     ) -> Result<Vec<Map<String, Value>>> {
         let txn = index.env.read_txn()?;
         let mut search = index.search(&txn);
@@ -416,18 +418,22 @@ impl Search {
             search.query(query);
         }
 
-        if let Some(ref filter) = filter {
+        if let Some(ref filter) = self.filter {
             if let Some(condition) = milli::Filter::from_str(filter)? {
                 search.filter(condition);
             }
         }
 
-        if let Some(offset) = offset {
-            search.offset(*offset);
+        if let Some(offset) = self.offset {
+            search.offset(offset);
         }
 
-        if let Some(limit) = limit {
-            search.limit(*limit);
+        if let Some(limit) = self.limit {
+            search.limit(limit);
+        }
+
+        if let Some(ref user) = self.user {
+            search.with_user(user.to_string());
         }
 
         let result = search.execute()?;
