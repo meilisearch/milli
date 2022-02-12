@@ -16,7 +16,6 @@ use crate::heed_codec::facet::{
     FacetLevelValueF64Codec, FacetStringLevelZeroCodec, FacetStringLevelZeroValueCodec,
     FieldDocIdFacetF64Codec, FieldDocIdFacetStringCodec,
 };
-use crate::update::AvailableDocumentsIds;
 use crate::{
     default_criteria, BEU32StrCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec, Criterion,
     DocumentId, ExternalDocumentsIds, FacetDistribution, FieldDistribution, FieldId,
@@ -873,30 +872,13 @@ impl Index {
         mut docids: Vec<String>,
     ) -> Result<()> {
         docids.sort_unstable();
-        let mut external_documents_ids = self.external_documents_ids(wtxn)?;
-        let mut new_docids = fst::MapBuilder::memory();
+        let external_documents_ids = self.external_documents_ids(wtxn)?;
         let mut bitmap = RoaringBitmap::new();
-        let documents_ids = self.documents_ids(wtxn)?;
-        let mut available_documents_ids = AvailableDocumentsIds::from_documents_ids(&documents_ids);
         for id in docids {
-            match external_documents_ids.get(&id) {
-                Some(id) => {
-                    bitmap.insert(id);
-                }
-                None => {
-                    let next = available_documents_ids.next().unwrap();
-                    bitmap.insert(next);
-                    new_docids.insert(id, next as u64)?;
-                }
+            if let Some(id) = external_documents_ids.get(&id) {
+                bitmap.insert(id);
             }
         }
-
-        let new_docids = new_docids.into_map();
-
-        external_documents_ids.insert_ids(&new_docids)?;
-        let external_documents_ids = external_documents_ids.into_static();
-
-        self.put_external_documents_ids(wtxn, &external_documents_ids)?;
 
         let new_filter = match self.users.get(wtxn, user)? {
             Some(mut filter) => {
