@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::borrow::Cow;
 use std::convert::TryInto;
 use std::fs::File;

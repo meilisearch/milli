@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::num::NonZeroU32;
 use std::{cmp, str};
 

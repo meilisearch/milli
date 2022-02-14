@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 mod extract;
 mod helpers;
 mod transform;

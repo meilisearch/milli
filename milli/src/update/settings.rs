@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::result::Result as StdResult;
 

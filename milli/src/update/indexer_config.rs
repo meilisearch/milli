@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use grenad::CompressionType;
 use rayon::ThreadPool;
 

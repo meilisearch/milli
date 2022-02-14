@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::str;
 
 use fst::Streamer;

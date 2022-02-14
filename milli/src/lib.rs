@@ -1,3 +1,8 @@
+#![feature(proc_macro_hygiene)]
+#![feature(custom_inner_attributes)]
+#[cfg(feature = "profiling")]
+#[macro_use]
+extern crate flamer;
 #[macro_use]
 pub mod documents;
 
@@ -11,6 +16,7 @@ pub mod heed_codec;
 pub mod index;
 pub mod proximity;
 mod search;
+
 pub mod update;
 
 use std::collections::{BTreeMap, HashMap};

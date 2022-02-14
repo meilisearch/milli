@@ -19,6 +19,10 @@ byte-unit = { version = "4.0.12", features = ["serde"] }
 bimap = "0.6.1"
 csv = "1.1.6"
 stderrlog = "0.5.1"
+tracy-rs = { version = "0.1.2", features = ["enable_profiler"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 jemallocator = "0.3.2"
+
+[features]
+profiling = ["tracy-rs", "milli/profiling"]

@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::fs::File;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::{cmp, mem};

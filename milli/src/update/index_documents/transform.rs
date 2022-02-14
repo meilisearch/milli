@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::collections::HashMap;

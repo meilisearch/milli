@@ -48,6 +48,10 @@ log = "0.4.14"
 logging_timer = "1.0.0"
 csv = "1.1.6"
 
+# profiling
+tracy-rs = { version = "0.1.2", features = ["enable_profiler"], optional = true }
+flamer = { path = "../../flamer", optional = true }
+
 [dev-dependencies]
 big_s = "1.0.2"
 maplit = "1.0.2"
@@ -55,3 +59,4 @@ rand = "0.8.3"
 
 [features]
 default = []
+profiling = ["tracy-rs", "flamer"]

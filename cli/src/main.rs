@@ -32,6 +32,10 @@ struct Cli {
     verbose: usize,
     #[structopt(subcommand)]
     subcommand: Command,
+
+    #[cfg_attr(feature = "profiling", structopt(long))]
+    #[cfg(feature = "profiling")]
+    tracy_lib: String,
 }
 
 #[derive(Debug, StructOpt)]
@@ -152,6 +156,13 @@ fn setup(opt: &Cli) -> Result<()> {
 
 fn main() -> Result<()> {
     let command = Cli::from_args();
+
+    #[cfg(feature = "profiling")]
+    unsafe {
+        if !tracy_rs::load(&command.tracy_lib) {
+            eyre::bail!("Tracy lib not found at path: {}", command.tracy_lib);
+        }
+    }
 
     setup(&command)?;
 

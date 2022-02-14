@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "profiling", flame)]
+
 use chrono::Utc;
 use roaring::RoaringBitmap;
 
