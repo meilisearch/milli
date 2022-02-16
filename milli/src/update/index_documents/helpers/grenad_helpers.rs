@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::fs::File;
-use std::io::{self, Seek, SeekFrom};
+use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::time::Instant;
 
 use grenad::{CompressionType, MergerIter, Reader, Sorter};
@@ -17,13 +17,13 @@ pub fn create_writer<R: io::Write>(
     typ: grenad::CompressionType,
     level: Option<u32>,
     file: R,
-) -> grenad::Writer<R> {
+) -> grenad::Writer<BufWriter<R>> {
     let mut builder = grenad::Writer::builder();
     builder.compression_type(typ);
     if let Some(level) = level {
         builder.compression_level(level);
     }
-    builder.build(file)
+    builder.build(BufWriter::new(file))
 }
 
 pub fn create_sorter(
@@ -62,8 +62,10 @@ pub fn sorter_into_reader(
     Ok(writer_into_reader(writer)?)
 }
 
-pub fn writer_into_reader(writer: grenad::Writer<File>) -> Result<grenad::Reader<File>> {
+pub fn writer_into_reader(writer: grenad::Writer<BufWriter<File>>) -> Result<grenad::Reader<File>> {
     let mut file = writer.into_inner()?;
+    file.flush()?;
+    let mut file = file.into_inner().map_err(|e| e.into_error())?;
     file.seek(SeekFrom::Start(0))?;
     grenad::Reader::new(file).map_err(Into::into)
 }

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Instant;
 
 use itertools::Itertools;
@@ -384,6 +384,8 @@ impl<'a, 'i> Transform<'a, 'i> {
         // into this writer, extract the file and reset the seek to be able to read it again.
         final_sorter.write_into_stream_writer(&mut writer)?;
         let mut documents_file = writer.into_inner()?;
+        documents_file.flush()?;
+        let mut documents_file = documents_file.into_inner().map_err(|e| e.into_error())?;
         documents_file.seek(SeekFrom::Start(0))?;
 
         let before_docids_merging = Instant::now();
@@ -451,6 +453,8 @@ impl<'a, 'i> Transform<'a, 'i> {
         // Once we have written all the documents, we extract
         // the file and reset the seek to be able to read it again.
         let mut documents_file = writer.into_inner()?;
+        documents_file.flush()?;
+        let mut documents_file = documents_file.into_inner().map_err(|e| e.into_error())?;
         documents_file.seek(SeekFrom::Start(0))?;
 
         Ok(TransformOutput {

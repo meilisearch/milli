@@ -1,4 +1,5 @@
 use std::fs::File;
+use std::io::BufWriter;
 use std::num::{NonZeroU8, NonZeroUsize};
 use std::{cmp, mem};
 
@@ -208,7 +209,7 @@ fn compute_facet_number_levels<'t>(
 }
 
 fn write_number_entry(
-    writer: &mut Writer<File>,
+    writer: &mut Writer<BufWriter<File>>,
     field_id: FieldId,
     level: u8,
     left: f64,
@@ -324,7 +325,7 @@ fn compute_facet_string_levels<'t>(
 }
 
 fn write_string_entry(
-    writer: &mut Writer<File>,
+    writer: &mut Writer<BufWriter<File>>,
     field_id: FieldId,
     level: NonZeroU8,
     (left_id, left_value): (u32, &str),
