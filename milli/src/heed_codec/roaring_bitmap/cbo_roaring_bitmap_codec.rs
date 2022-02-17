@@ -82,7 +82,7 @@ impl CboRoaringBitmapCodec {
                     buffer.extend_from_slice(&integer.to_ne_bytes());
                 }
             } else {
-                let roaring = RoaringBitmap::from_sorted_iter(vec.into_iter());
+                let roaring = RoaringBitmap::from_sorted_iter(vec.into_iter()).unwrap();
                 roaring.serialize_into(buffer)?;
             }
         } else {
