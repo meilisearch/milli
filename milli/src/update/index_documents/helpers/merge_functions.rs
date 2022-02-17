@@ -39,7 +39,7 @@ pub fn merge_roaring_bitmaps<'a>(_key: &[u8], values: &[Cow<'a, [u8]>]) -> Resul
         let merged = values
             .iter()
             .map(AsRef::as_ref)
-            .map(RoaringBitmap::deserialize_from)
+            .map(RoaringBitmap::deserialize_unchecked_from)
             .map(StdResult::unwrap)
             .reduce(|a, b| a | b)
             .unwrap();
@@ -63,7 +63,7 @@ pub fn keep_first_prefix_value_merge_roaring_bitmaps<'a>(
             .map(decode_prefix_string)
             .map(Option::unwrap)
             .map(|(_, bitmap_bytes)| bitmap_bytes)
-            .map(RoaringBitmap::deserialize_from)
+            .map(RoaringBitmap::deserialize_unchecked_from)
             .map(StdResult::unwrap)
             .reduce(|a, b| a | b)
             .unwrap();

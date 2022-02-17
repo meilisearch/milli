@@ -592,7 +592,7 @@ mod test {
                 }
                 values.sort_unstable();
 
-                RoaringBitmap::from_sorted_iter(values.into_iter())
+                RoaringBitmap::from_sorted_iter(values.into_iter()).unwrap()
             }
 
             TestContext {

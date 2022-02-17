@@ -551,7 +551,10 @@ pub mod test {
                     .iter()
                     .enumerate()
                     .map(|(i, w)| {
-                        (w.clone(), RoaringBitmap::from_sorted_iter(std::iter::once(i as u32)))
+                        (
+                            w.clone(),
+                            RoaringBitmap::from_sorted_iter(std::iter::once(i as u32)).unwrap(),
+                        )
                     })
                     .collect())
             } else {
@@ -606,7 +609,7 @@ pub mod test {
                 }
                 values.sort_unstable();
 
-                RoaringBitmap::from_sorted_iter(values.into_iter())
+                RoaringBitmap::from_sorted_iter(values.into_iter()).unwrap()
             }
 
             let word_docids = hashmap! {

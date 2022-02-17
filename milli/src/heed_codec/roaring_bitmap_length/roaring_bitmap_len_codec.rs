@@ -10,7 +10,7 @@ pub struct RoaringBitmapLenCodec;
 
 impl RoaringBitmapLenCodec {
     // FIXME should be exported in the RoaringBitmap crate
-    fn deserialize_from_slice(mut bytes: &[u8]) -> io::Result<u64> {
+    fn deserialize_unchecked_from_slice(mut bytes: &[u8]) -> io::Result<u64> {
         let (size, has_offsets) = {
             let cookie = bytes.read_u32::<LittleEndian>()?;
             if cookie == SERIAL_COOKIE_NO_RUNCONTAINER {
@@ -55,7 +55,7 @@ impl heed::BytesDecode<'_> for RoaringBitmapLenCodec {
     type DItem = u64;
 
     fn bytes_decode(bytes: &[u8]) -> Option<Self::DItem> {
-        RoaringBitmapLenCodec::deserialize_from_slice(bytes).ok()
+        RoaringBitmapLenCodec::deserialize_unchecked_from_slice(bytes).ok()
     }
 }
 
@@ -71,7 +71,7 @@ mod tests {
     fn deserialize_roaring_bitmap_length() {
         let bitmap: RoaringBitmap = (0..500).chain(800..800_000).chain(920_056..930_032).collect();
         let bytes = RoaringBitmapCodec::bytes_encode(&bitmap).unwrap();
-        let len = RoaringBitmapLenCodec::deserialize_from_slice(&bytes).unwrap();
+        let len = RoaringBitmapLenCodec::deserialize_unchecked_from_slice(&bytes).unwrap();
         assert_eq!(bitmap.len(), len);
     }
 }

@@ -173,9 +173,9 @@ pub(crate) fn write_typed_chunk_into_index(
                 |value, _buffer| Ok(value),
                 |new_values, db_values, buffer| {
                     let (_, new_values) = decode_prefix_string(new_values).unwrap();
-                    let new_values = RoaringBitmap::deserialize_from(new_values)?;
+                    let new_values = RoaringBitmap::deserialize_unchecked_from(new_values)?;
                     let (db_original, db_values) = decode_prefix_string(db_values).unwrap();
-                    let db_values = RoaringBitmap::deserialize_from(db_values)?;
+                    let db_values = RoaringBitmap::deserialize_unchecked_from(db_values)?;
                     let values = new_values | db_values;
                     encode_prefix_string(db_original, buffer)?;
                     Ok(values.serialize_into(buffer)?)
@@ -209,8 +209,8 @@ pub(crate) fn write_typed_chunk_into_index(
 }
 
 fn merge_roaring_bitmaps(new_value: &[u8], db_value: &[u8], buffer: &mut Vec<u8>) -> Result<()> {
-    let new_value = RoaringBitmap::deserialize_from(new_value)?;
-    let db_value = RoaringBitmap::deserialize_from(db_value)?;
+    let new_value = RoaringBitmap::deserialize_unchecked_from(new_value)?;
+    let db_value = RoaringBitmap::deserialize_unchecked_from(db_value)?;
     let value = new_value | db_value;
     Ok(serialize_roaring_bitmap(&value, buffer)?)
 }
