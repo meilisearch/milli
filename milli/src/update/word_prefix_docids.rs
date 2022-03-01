@@ -4,9 +4,11 @@ use grenad::{CompressionType, MergerBuilder};
 use heed::types::ByteSlice;
 
 use crate::update::index_documents::{
-    create_sorter, merge_roaring_bitmaps, sorter_into_lmdb_database, CursorClonableMmap, MergeFn,
+    create_sorter, merge_roaring_bitmaps, sorter_into_lmdb_database, CursorClonableMmap,
 };
 use crate::{Index, Result};
+
+use super::index_documents::MilliSorter;
 
 pub struct WordPrefixDocids<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -119,7 +121,7 @@ impl<'t, 'u, 'i> WordPrefixDocids<'t, 'u, 'i> {
 
 fn write_prefixes_in_sorter(
     prefixes: &mut HashMap<Vec<u8>, Vec<Vec<u8>>>,
-    sorter: &mut grenad::Sorter<MergeFn>,
+    sorter: &mut MilliSorter,
 ) -> Result<()> {
     for (key, data_slices) in prefixes.drain() {
         for data in data_slices {

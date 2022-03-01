@@ -11,7 +11,7 @@ use roaring::RoaringBitmap;
 use serde_json::{Map, Value};
 
 use super::helpers::{
-    create_sorter, create_writer, keep_latest_obkv, merge_obkvs, merge_two_obkvs, MergeFn,
+    create_sorter, create_writer, keep_latest_obkv, merge_obkvs, merge_two_obkvs, MilliSorter,
 };
 use super::{IndexDocumentsMethod, IndexerConfig};
 use crate::documents::{DocumentBatchReader, DocumentsBatchIndex};
@@ -45,7 +45,7 @@ pub struct Transform<'a, 'i> {
     pub autogenerate_docids: bool,
     pub index_documents_method: IndexDocumentsMethod,
 
-    sorter: grenad::Sorter<MergeFn>,
+    sorter: MilliSorter,
     documents_count: usize,
 }
 

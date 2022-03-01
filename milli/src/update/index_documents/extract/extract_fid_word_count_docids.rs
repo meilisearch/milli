@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::{cmp, io};
 
-use grenad::Sorter;
-
 use super::helpers::{
     create_sorter, merge_cbo_roaring_bitmaps, read_u32_ne_bytes, sorter_into_reader,
-    try_split_array_at, GrenadParameters, MergeFn,
+    try_split_array_at, GrenadParameters,
 };
 use crate::error::SerializationError;
 use crate::index::db_name::DOCID_WORD_POSITIONS;
+use crate::update::index_documents::helpers::MilliSorter;
 use crate::{relative_from_absolute_position, DocumentId, FieldId, Result};
 
 /// Extracts the field id word count and the documents ids where
@@ -75,7 +74,7 @@ pub fn extract_fid_word_count_docids<R: io::Read + io::Seek>(
 }
 
 fn drain_document_fid_wordcount_into_sorter(
-    fid_word_count_docids_sorter: &mut Sorter<MergeFn>,
+    fid_word_count_docids_sorter: &mut MilliSorter,
     document_fid_wordcount: &mut HashMap<FieldId, u32>,
     document_id: DocumentId,
 ) -> Result<()> {

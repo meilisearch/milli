@@ -8,7 +8,7 @@ use slice_group_by::GroupBy;
 
 use crate::update::index_documents::{
     create_sorter, merge_cbo_roaring_bitmaps, sorter_into_lmdb_database, CursorClonableMmap,
-    MergeFn,
+    MilliSorter,
 };
 use crate::{Index, Result, StrStrU8Codec};
 
@@ -185,7 +185,7 @@ impl<'t, 'u, 'i> WordPrefixPairProximityDocids<'t, 'u, 'i> {
 
 fn write_prefixes_in_sorter(
     prefixes: &mut HashMap<Vec<u8>, Vec<Vec<u8>>>,
-    sorter: &mut grenad::Sorter<MergeFn>,
+    sorter: &mut MilliSorter,
 ) -> Result<()> {
     for (key, data_slices) in prefixes.drain() {
         for data in data_slices {
@@ -205,7 +205,7 @@ fn insert_current_prefix_data_in_sorter<'a>(
     buffer: &mut Vec<u8>,
     current_prefixes: &mut Option<&'a &'a [String]>,
     prefixes_cache: &mut HashMap<Vec<u8>, Vec<Vec<u8>>>,
-    word_prefix_pair_proximity_docids_sorter: &mut grenad::Sorter<MergeFn>,
+    word_prefix_pair_proximity_docids_sorter: &mut MilliSorter,
     prefix_fst_keys: &'a [&'a [std::string::String]],
     max_prefix_length: usize,
     w1: &str,

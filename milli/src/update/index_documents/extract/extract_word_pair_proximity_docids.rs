@@ -5,11 +5,12 @@ use std::{cmp, io, mem, str, vec};
 
 use super::helpers::{
     create_sorter, merge_cbo_roaring_bitmaps, read_u32_ne_bytes, sorter_into_reader,
-    try_split_array_at, GrenadParameters, MergeFn,
+    try_split_array_at, GrenadParameters,
 };
 use crate::error::SerializationError;
 use crate::index::db_name::DOCID_WORD_POSITIONS;
 use crate::proximity::{positions_proximity, MAX_DISTANCE};
+use crate::update::index_documents::helpers::MilliSorter;
 use crate::{DocumentId, Result};
 
 /// Extracts the best proximity between pairs of words and the documents ids where this pair appear.
@@ -83,7 +84,7 @@ pub fn extract_word_pair_proximity_docids<R: io::Read + io::Seek>(
 fn document_word_positions_into_sorter<'b>(
     document_id: DocumentId,
     mut word_positions_heap: BinaryHeap<PeekedWordPosition<vec::IntoIter<u32>>>,
-    word_pair_proximity_docids_sorter: &mut grenad::Sorter<MergeFn>,
+    word_pair_proximity_docids_sorter: &mut MilliSorter,
 ) -> Result<()> {
     let mut word_pair_proximity = HashMap::new();
     let mut ordered_peeked_word_positions = Vec::new();

@@ -3,14 +3,16 @@ use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::time::Instant;
 
-use grenad::{CompressionType, MergerIter, Reader, Sorter};
+use grenad::{ChunkCreator, CompressionType, MergerIter, Reader};
 use heed::types::ByteSlice;
 use log::debug;
+use tempfile::tempfile;
 
 use super::{ClonableMmap, MergeFn};
 use crate::error::InternalError;
 use crate::Result;
 
+pub type MilliSorter = grenad::Sorter<MergeFn, BufferedTempfile>;
 pub type CursorClonableMmap = io::Cursor<ClonableMmap>;
 
 pub fn create_writer<R: io::Write>(
@@ -26,13 +28,72 @@ pub fn create_writer<R: io::Write>(
     builder.build(BufWriter::new(file))
 }
 
+pub struct BufferedTempfile;
+
+impl ChunkCreator for BufferedTempfile {
+    type Chunk = ReadableBufWriter<File>;
+
+    type Error = io::Error;
+
+    fn create(&self) -> std::result::Result<Self::Chunk, Self::Error> {
+        Ok(ReadableBufWriter::new(tempfile()?))
+    }
+}
+
+pub struct ReadableBufWriter<F: io::Write + io::Read>(BufWriter<F>);
+
+impl<F> ReadableBufWriter<F>
+where
+    F: io::Write + io::Read,
+{
+    fn new(f: F) -> Self {
+        ReadableBufWriter(BufWriter::with_capacity(16_384, f))
+    }
+}
+
+impl<F> io::Read for ReadableBufWriter<F>
+where
+    F: io::Write + io::Read,
+{
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // Before we can make a read, we need to make sure that the internal buffer has bee
+        // flushed.
+        if !self.0.buffer().is_empty() {
+            self.0.flush()?;
+        }
+        self.0.get_mut().read(buf)
+    }
+}
+
+impl<F> io::Write for ReadableBufWriter<F>
+where
+    F: io::Write + io::Read,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<F> io::Seek for ReadableBufWriter<F>
+where
+    F: io::Write + io::Read + io::Seek,
+{
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
 pub fn create_sorter(
     merge: MergeFn,
     chunk_compression_type: grenad::CompressionType,
     chunk_compression_level: Option<u32>,
     max_nb_chunks: Option<usize>,
     max_memory: Option<usize>,
-) -> grenad::Sorter<MergeFn> {
+) -> MilliSorter {
     let mut builder = grenad::Sorter::builder(merge);
     builder.chunk_compression_type(chunk_compression_type);
     if let Some(level) = chunk_compression_level {
@@ -45,11 +106,13 @@ pub fn create_sorter(
         builder.dump_threshold(memory);
         builder.allow_realloc(false);
     }
+
+    let builder = builder.chunk_creator(BufferedTempfile);
     builder.build()
 }
 
-pub fn sorter_into_reader(
-    sorter: grenad::Sorter<MergeFn>,
+pub fn sorter_into_reader<CC: ChunkCreator>(
+    sorter: grenad::Sorter<MergeFn, CC>,
     indexer: GrenadParameters,
 ) -> Result<grenad::Reader<File>> {
     let mut writer = create_writer(
@@ -205,7 +268,7 @@ pub fn write_into_lmdb_database(
 pub fn sorter_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
     database: heed::PolyDatabase,
-    sorter: Sorter<MergeFn>,
+    sorter: MilliSorter,
     merge: MergeFn,
 ) -> Result<()> {
     debug!("Writing MTBL sorter...");

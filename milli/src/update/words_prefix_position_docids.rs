@@ -12,9 +12,10 @@ use crate::heed_codec::StrBEU32Codec;
 use crate::index::main_key::WORDS_PREFIXES_FST_KEY;
 use crate::update::index_documents::{
     create_sorter, merge_cbo_roaring_bitmaps, sorter_into_lmdb_database, CursorClonableMmap,
-    MergeFn,
 };
 use crate::{Index, Result};
+
+use super::index_documents::MilliSorter;
 
 pub struct WordPrefixPositionDocids<'t, 'u, 'i> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
@@ -164,7 +165,7 @@ impl<'t, 'u, 'i> WordPrefixPositionDocids<'t, 'u, 'i> {
 
 fn write_prefixes_in_sorter(
     prefixes: &mut HashMap<Vec<u8>, Vec<Vec<u8>>>,
-    sorter: &mut grenad::Sorter<MergeFn>,
+    sorter: &mut MilliSorter,
 ) -> Result<()> {
     for (key, data_slices) in prefixes.drain() {
         for data in data_slices {
