@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::time::Instant;
 
+use buf_redux::policy::{FlushAmt, WriterPolicy};
 use grenad::{ChunkCreator, CompressionType, MergerIter, Reader};
 use heed::types::ByteSlice;
 use log::debug;
@@ -40,14 +41,33 @@ impl ChunkCreator for BufferedTempfile {
     }
 }
 
-pub struct ReadableBufWriter<F: io::Write + io::Read>(BufWriter<F>);
+struct SorterWriterPolicy;
+
+impl WriterPolicy for SorterWriterPolicy {
+    fn before_write(
+        &mut self,
+        _buf: &mut buf_redux::Buffer,
+        _incoming: usize,
+    ) -> buf_redux::policy::FlushAmt {
+        FlushAmt(0)
+    }
+
+    fn after_write(&mut self, buf: &buf_redux::Buffer) -> buf_redux::policy::FlushAmt {
+        let count = (buf.len() / 4096) * 4096;
+        FlushAmt(count)
+    }
+}
+
+pub struct ReadableBufWriter<F: io::Write + io::Read>(buf_redux::BufWriter<F, SorterWriterPolicy>);
 
 impl<F> ReadableBufWriter<F>
 where
     F: io::Write + io::Read,
 {
     fn new(f: F) -> Self {
-        ReadableBufWriter(BufWriter::with_capacity(16_384, f))
+        let buffer = buf_redux::BufWriter::with_capacity_ringbuf(4096 * 4, f);
+        let buffer = buffer.set_policy(SorterWriterPolicy);
+        ReadableBufWriter(buffer)
     }
 }
 
@@ -58,7 +78,7 @@ where
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         // Before we can make a read, we need to make sure that the internal buffer has bee
         // flushed.
-        if !self.0.buffer().is_empty() {
+        if self.0.buf_len() != 0 {
             self.0.flush()?;
         }
         self.0.get_mut().read(buf)
