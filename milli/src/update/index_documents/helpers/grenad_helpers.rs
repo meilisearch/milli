@@ -41,6 +41,34 @@ impl ChunkCreator for BufferedTempfile {
     }
 }
 
+struct No8Bytes<F>(F);
+
+impl<F: io::Read> io::Read for No8Bytes<F> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buf)
+    }
+}
+
+impl<F: io::Write> io::Write for No8Bytes<F> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if buf.len() == 8 {
+            panic!("8 bytes write !!")
+        }
+
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<F: io::Seek> io::Seek for No8Bytes<F> {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        self.0.seek(pos)
+    }
+}
+
 struct SorterWriterPolicy;
 
 impl WriterPolicy for SorterWriterPolicy {
@@ -54,18 +82,21 @@ impl WriterPolicy for SorterWriterPolicy {
 
     fn after_write(&mut self, buf: &buf_redux::Buffer) -> buf_redux::policy::FlushAmt {
         let count = (buf.len() / 4096) * 4096;
+        println!("flushing {count} bytes");
         FlushAmt(count)
     }
 }
 
-pub struct ReadableBufWriter<F: io::Write + io::Read>(buf_redux::BufWriter<F, SorterWriterPolicy>);
+pub struct ReadableBufWriter<F: io::Write + io::Read>(
+    buf_redux::BufWriter<No8Bytes<F>, SorterWriterPolicy>,
+);
 
 impl<F> ReadableBufWriter<F>
 where
     F: io::Write + io::Read,
 {
     fn new(f: F) -> Self {
-        let buffer = buf_redux::BufWriter::with_capacity_ringbuf(4096 * 4, f);
+        let buffer = buf_redux::BufWriter::with_capacity_ringbuf(4096 * 4, No8Bytes(f));
         let buffer = buffer.set_policy(SorterWriterPolicy);
         ReadableBufWriter(buffer)
     }
