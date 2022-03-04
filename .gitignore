@@ -6,3 +6,6 @@
 *.csv
 *.mmdb
 *.svg
+
+# macOS
+*.DS_Store
