@@ -133,6 +133,7 @@ impl From<HeedError> for Error {
             HeedError::Decoding => InternalError(Serialization(Decoding { db_name: None })),
             HeedError::InvalidDatabaseTyping => InternalError(InvalidDatabaseTyping),
             HeedError::DatabaseClosing => InternalError(DatabaseClosing),
+            HeedError::BadOpenOptions => todo!(),
         }
     }
 }

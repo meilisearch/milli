@@ -179,19 +179,20 @@ pub fn write_into_lmdb_database(
     debug!("Writing MTBL stores...");
     let before = Instant::now();
 
-    let mut cursor = reader.into_cursor()?;
-    while let Some((k, v)) = cursor.move_on_next()? {
-        let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
-        match iter.next().transpose()? {
-            Some((key, old_val)) if key == k => {
-                let vals = &[Cow::Borrowed(old_val), Cow::Borrowed(v)][..];
-                let val = merge(k, &vals)?;
+    let mut grenad_cursor = reader.into_cursor()?;
+    let mut heed_cursor = database.iter_mut::<_, ByteSlice, ByteSlice>(wtxn)?;
+
+    while let Some((key, value)) = grenad_cursor.move_on_next()? {
+        match heed_cursor.move_on_key(key)? {
+            Some(old_value) => {
+                let vals = &[Cow::Borrowed(old_value), Cow::Borrowed(value)][..];
+                let val = merge(key, &vals)?;
                 // safety: we don't keep references from inside the LMDB database.
-                unsafe { iter.put_current(k, &val)? };
+                unsafe { heed_cursor.put_current(key, &val)? };
             }
-            _ => {
-                drop(iter);
-                database.put::<_, ByteSlice, ByteSlice>(wtxn, k, v)?;
+            None => {
+                // safety: we don't keep references from inside the LMDB database.
+                unsafe { heed_cursor.put(key, value)? };
             }
         }
     }

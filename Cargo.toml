@@ -18,3 +18,6 @@ opt-level = 3
 opt-level = 3
 [profile.test.build-override]
 opt-level = 3
+
+[patch."https://github.com/meilisearch/heed"]
+heed = { git = "https://github.com/meilisearch//heed", branch = "cursor-set" }
