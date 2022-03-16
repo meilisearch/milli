@@ -38,6 +38,8 @@ pub use self::heed_codec::{
 pub use self::index::Index;
 pub use self::search::{FacetDistribution, Filter, MatchingWords, Search, SearchResult};
 
+pub use heed;
+
 pub type Result<T> = std::result::Result<T, error::Error>;
 
 pub type FastMap4<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher32>>;
