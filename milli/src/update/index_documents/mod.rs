@@ -1013,7 +1013,7 @@ mod tests {
         options.map_size(10 * 1024 * 1024); // 10 MB
         let index = Index::new(options, &path).unwrap();
 
-        // First we send 3 documents with an id for only one of them.
+        // We send 6 documents and mix the ones that have _geo and those that don't have it.
         let mut wtxn = index.write_txn().unwrap();
         let documents = documents!([
           { "id": 2, "price": 3.5, "_geo": { "lat": 12, "lng": 42 } },
