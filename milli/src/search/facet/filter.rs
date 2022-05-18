@@ -282,6 +282,19 @@ impl<'a> Filter<'a> {
             Condition::LowerThan(val) => (Included(f64::MIN), Excluded(val.parse()?)),
             Condition::LowerThanOrEqual(val) => (Included(f64::MIN), Included(val.parse()?)),
             Condition::Between { from, to } => (Included(from.parse()?), Included(to.parse()?)),
+            Condition::Exist => {
+                let (_, (_, exist_string)) = strings_db
+                    .get_greater_than(rtxn, &(field_id, ""))?
+                    .unwrap_or(((0, ""), ("", RoaringBitmap::new())));
+                let (_, exist_number) = numbers_db
+                    .get_greater_than(rtxn, &(field_id, 0, f64::MIN, f64::MAX))?
+                    .unwrap_or(((0, 0, 0., 0.), RoaringBitmap::new()));
+
+                return Ok(exist_string | exist_number);
+            }
+            Condition::NotExist => {
+                todo!();
+            }
             Condition::Equal(val) => {
                 let (_original_value, string_docids) =
                     strings_db.get(rtxn, &(field_id, &val.to_lowercase()))?.unwrap_or_default();

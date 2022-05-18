@@ -6,8 +6,9 @@
 //! or             = and (~ "OR" ~ and)
 //! and            = not (~ "AND" not)*
 //! not            = ("NOT" ~ not) | primary
-//! primary        = (WS* ~ "("  expression ")" ~ WS*) | geoRadius | condition | to
+//! primary        = (WS* ~ "("  expression ")" ~ WS*) | geoRadius | condition | exist | to
 //! condition      = value ("==" | ">" ...) value
+//! exist          = value EXIST
 //! to             = value value TO value
 //! value          = WS* ~ ( word | singleQuoted | doubleQuoted) ~ WS*
 //! singleQuoted   = "'" .* all but quotes "'"
@@ -43,6 +44,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::str::FromStr;
 
+use condition::parse_exist;
 pub use condition::{parse_condition, parse_to, Condition};
 use error::{cut_with_err, NomErrorExt};
 pub use error::{Error, ErrorKind};
@@ -253,6 +255,7 @@ fn parse_primary(input: Span) -> IResult<FilterCondition> {
         ),
         parse_geo_radius,
         parse_condition,
+        parse_exist,
         parse_to,
         // the next lines are only for error handling and are written at the end to have the less possible performance impact
         parse_geo_point,
@@ -423,6 +426,20 @@ pub mod tests {
                 Fc::Condition {
                     fid: rtok("NOT ", "subscribers"),
                     op: Condition::LowerThan(rtok("NOT subscribers >= ", "1000")),
+                },
+            ),
+            (
+                "subscribers EXIST",
+                Fc::Condition {
+                    fid: rtok("", "subscribers"),
+                    op: Condition::Exist,
+                },
+            ),
+            (
+                "NOT subscribers EXIST",
+                Fc::Condition {
+                    fid: rtok("NOT ", "subscribers"),
+                    op: Condition::NotExist,
                 },
             ),
             (
