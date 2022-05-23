@@ -240,8 +240,8 @@ impl<'a> QueryTreeBuilder<'a> {
                 self.authorize_typos,
                 &primitive_query,
             )?;
-            let matching_words =
-                create_matching_words(self, self.authorize_typos, &primitive_query)?;
+                // create_matching_words(self, self.authorize_typos, &primitive_query)?;
+            let matching_words = MatchingWords::new(vec![])            ;
             Ok(Some((qt, primitive_query, matching_words)))
         } else {
             Ok(None)
