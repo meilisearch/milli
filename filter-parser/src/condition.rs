@@ -8,9 +8,8 @@
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::combinator::cut;
-use nom::sequence::{terminated, tuple};
+use nom::sequence::{tuple};
 use Condition::*;
-
 use crate::{parse_value, FilterCondition, IResult, Span, Token};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,8 +63,7 @@ pub fn parse_condition(input: Span) -> IResult<FilterCondition> {
 
 /// exist          = value EXIST
 pub fn parse_exist(input: Span) -> IResult<FilterCondition> {
-    let (input, key) = terminated(parse_value, tag("EXIST"))(input)?;
-
+    let (input, key) = parse_value(input)?;
     Ok((input, FilterCondition::Condition { fid: key.into(), op: Exist }))
 }
 

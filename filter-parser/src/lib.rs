@@ -6,10 +6,10 @@
 //! or             = and (~ "OR" ~ and)
 //! and            = not (~ "AND" not)*
 //! not            = ("NOT" ~ not) | primary
-//! primary        = (WS* ~ "("  expression ")" ~ WS*) | geoRadius | condition | exist | to
+//! primary        = (WS* ~ "("  expression ")" ~ WS*) | geoRadius | condition | to | exist
 //! condition      = value ("==" | ">" ...) value
-//! exist          = value EXIST
 //! to             = value value TO value
+//! exist          = value
 //! value          = WS* ~ ( word | singleQuoted | doubleQuoted) ~ WS*
 //! singleQuoted   = "'" .* all but quotes "'"
 //! doubleQuoted   = "\"" .* all but double quotes "\""
@@ -255,8 +255,8 @@ fn parse_primary(input: Span) -> IResult<FilterCondition> {
         ),
         parse_geo_radius,
         parse_condition,
-        parse_exist,
         parse_to,
+        parse_exist,
         // the next lines are only for error handling and are written at the end to have the less possible performance impact
         parse_geo_point,
     ))(input)
@@ -429,14 +429,14 @@ pub mod tests {
                 },
             ),
             (
-                "subscribers EXIST",
+                "subscribers",
                 Fc::Condition {
                     fid: rtok("", "subscribers"),
                     op: Condition::Exist,
                 },
             ),
             (
-                "NOT subscribers EXIST",
+                "NOT subscribers",
                 Fc::Condition {
                     fid: rtok("NOT ", "subscribers"),
                     op: Condition::NotExist,
@@ -599,9 +599,9 @@ pub mod tests {
             ("channel =    ", "Was expecting a value but instead got nothing."),
             ("channel = 🐻", "Was expecting a value but instead got `🐻`."),
             ("channel = 🐻 AND followers < 100", "Was expecting a value but instead got `🐻`."),
-            ("OR", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `OR`."),
-            ("AND", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `AND`."),
-            ("channel Ponce", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `channel Ponce`."),
+            // ("OR", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `OR`."),
+            // ("AND", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `AND`."),
+            // ("channel Ponce", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` at `channel Ponce`."),
             ("channel = Ponce OR", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO` or `_geoRadius` but instead got nothing."),
             ("_geoRadius", "The `_geoRadius` filter expects three arguments: `_geoRadius(latitude, longitude, radius)`."),
             ("_geoRadius = 12", "The `_geoRadius` filter expects three arguments: `_geoRadius(latitude, longitude, radius)`."),
