@@ -386,6 +386,7 @@ fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyho
         field_id_word_count_docids,
         facet_id_f64_docids,
         facet_id_string_docids,
+        facet_id_exists_docids,
         exact_word_docids,
         exact_word_prefix_docids,
         field_id_docid_facet_f64s: _,
@@ -404,6 +405,7 @@ fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyho
     let field_id_word_count_docids_name = "field_id_word_count_docids";
     let facet_id_f64_docids_name = "facet_id_f64_docids";
     let facet_id_string_docids_name = "facet_id_string_docids";
+    let facet_id_exists_docids_name = "facet_id_exists_docids";
     let documents_name = "documents";
 
     let mut heap = BinaryHeap::with_capacity(limit + 1);
@@ -543,6 +545,17 @@ fn biggest_value_sizes(index: &Index, rtxn: &heed::RoTxn, limit: usize) -> anyho
                 let ((_fid, fvalue), value) = result?;
                 let key = format!("{} {}", facet_name, fvalue);
                 heap.push(Reverse((value.len(), key, facet_id_string_docids_name)));
+                if heap.len() > limit {
+                    heap.pop();
+                }
+            }
+
+            // List the docids where the facet exists
+            let db = facet_id_exists_docids.remap_data_type::<ByteSlice>();
+            for result in facet_values_iter(rtxn, db, facet_id)? {
+                let (_fid, value) = result?;
+                let key = format!("{}", facet_name);
+                heap.push(Reverse((value.len(), key, facet_id_exists_docids_name)));
                 if heap.len() > limit {
                     heap.pop();
                 }
@@ -987,6 +1000,7 @@ fn size_of_databases(index: &Index, rtxn: &heed::RoTxn, names: Vec<String>) -> a
         facet_id_string_docids,
         field_id_docid_facet_f64s,
         field_id_docid_facet_strings,
+        facet_id_exists_docids,
         exact_word_prefix_docids,
         exact_word_docids,
         documents,
@@ -1011,6 +1025,7 @@ fn size_of_databases(index: &Index, rtxn: &heed::RoTxn, names: Vec<String>) -> a
             FIELD_ID_WORD_COUNT_DOCIDS => field_id_word_count_docids.as_polymorph(),
             FACET_ID_F64_DOCIDS => facet_id_f64_docids.as_polymorph(),
             FACET_ID_STRING_DOCIDS => facet_id_string_docids.as_polymorph(),
+            FACET_ID_EXISTS_DOCIDS => facet_id_exists_docids.as_polymorph(),
             FIELD_ID_DOCID_FACET_F64S => field_id_docid_facet_f64s.as_polymorph(),
             FIELD_ID_DOCID_FACET_STRINGS => field_id_docid_facet_strings.as_polymorph(),
             EXACT_WORD_DOCIDS => exact_word_docids.as_polymorph(),
