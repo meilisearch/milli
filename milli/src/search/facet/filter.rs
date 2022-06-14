@@ -356,6 +356,11 @@ impl<'a> Filter<'a> {
         let strings_db = index.facet_id_string_docids;
 
         match &self.condition {
+            FilterCondition::Not(f) => {
+                let all_ids = index.documents_ids(rtxn)?;
+                let selected = Self::evaluate(&(f.as_ref().clone()).into(), rtxn, index)?;
+                return Ok(all_ids - selected);
+            }
             FilterCondition::Condition { fid, op } => {
                 let filterable_fields = index.filterable_fields(rtxn)?;
 
