@@ -167,6 +167,12 @@ fn ws<'a, O>(inner: impl FnMut(Span<'a>) -> IResult<O>) -> impl FnMut(Span<'a>) 
 
 /// value_list = (value ("," value)* ","?)?
 fn parse_value_list<'a>(input: Span<'a>) -> IResult<Vec<Token<'a>>> {
+
+    // TODO: here, I should return a failure with a clear explanation whenever possible
+    // for example:
+    // * expected the name of a field, but got `AND`
+    // * expected closing square bracket, but got `AND`
+
     let (input, first_value) = opt(parse_value)(input)?;
     if let Some(first_value) = first_value {
         let value_list_el_parser = preceded(ws(tag(",")), parse_value);
@@ -186,9 +192,21 @@ fn parse_in(input: Span) -> IResult<FilterCondition> {
     let (input, value) = parse_value(input)?;
     let (input, _) = ws(tag("IN"))(input)?;
 
-    let mut els_parser = delimited(tag("["), parse_value_list, tag("]"));
+    // everything after `IN` can be a failure
+    let (input, _) = cut_with_err(tag("["), |_| {
+        Error::new_from_kind(input, ErrorKind::InOpeningBracket)
+    })(input)?;
 
-    let (input, content) = els_parser(input)?;
+    let (input, content) = cut(parse_value_list)(input)?;
+    
+    // everything after `IN` can be a failure
+    let (input, _) = cut_with_err(tag("]"), |_| {
+        Error::new_from_kind(input, ErrorKind::InClosingBracket)
+    })(input)?;
+
+
+    // let mut els_parser = delimited(tag("["), parse_value_list, tag("]"));
+    // let (input, content) = els_parser(input)?;
     let filter = FilterCondition::In { fid: value, els: content };
     Ok((input, filter))
 }
@@ -734,6 +752,8 @@ pub mod tests {
             ("subscribers 100 TO1000", "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `subscribers 100 TO1000`."),
             ("channel = ponce ORdog != 'bernese mountain'", "Found unexpected characters at the end of the filter: `ORdog != \\'bernese mountain\\'`. You probably forgot an `OR` or an `AND` rule."),
             ("channel = ponce AND'dog' != 'bernese mountain'", "Found unexpected characters at the end of the filter: `AND\\'dog\\' != \\'bernese mountain\\'`. You probably forgot an `OR` or an `AND` rule."),
+            ("colour IN blue, green]", "Expected `[` after `IN` keyword."),
+            ("colour IN [blue, green", "Expected matching `]` after value list given to `IN[`."),
         ];
 
         for (input, expected) in test_case {

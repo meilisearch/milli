@@ -57,6 +57,8 @@ pub enum ErrorKind<'a> {
     ExpectedEof,
     ExpectedValue,
     MalformedValue,
+    InOpeningBracket,
+    InClosingBracket,
     MissingClosingDelimiter(char),
     Char(char),
     InternalError(error::ErrorKind),
@@ -144,6 +146,12 @@ impl<'a> Display for Error<'a> {
             }
             ErrorKind::MisusedGeo => {
                 writeln!(f, "The `_geoRadius` filter is an operation and can't be used as a value.")?
+            }
+            ErrorKind::InOpeningBracket => {
+                writeln!(f, "Expected `[` after `IN` keyword.")?
+            }
+            ErrorKind::InClosingBracket => {
+                writeln!(f, "Expected matching `]` after value list given to `IN[`.")?
             }
             ErrorKind::Char(c) => {
                 panic!("Tried to display a char error with `{}`", c)
