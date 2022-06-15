@@ -141,7 +141,12 @@ where
         // We check for user errors in this validator and if there is one, we can return
         // the `IndexDocument` struct as it is valid to send more documents into it.
         // However, if there is an internal error we throw it away!
-        let reader = match validate_documents_batch(self.wtxn, self.index, reader)? {
+        let reader = match validate_documents_batch(
+            self.wtxn,
+            self.index,
+            self.config.autogenerate_docids,
+            reader,
+        )? {
             Ok(reader) => reader,
             Err(user_error) => return Ok((self, Err(user_error))),
         };
@@ -626,10 +631,11 @@ mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -642,10 +648,11 @@ mod tests {
         // Second we send 1 document with id 1, to erase the previous ones.
         let mut wtxn = index.write_txn().unwrap();
         let content = documents!([ { "id": 1, "name": "updated kevin" } ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -662,9 +669,11 @@ mod tests {
             { "id": 2, "name": "updated kevina" },
             { "id": 3, "name": "updated benoit" }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
+        builder.execute().unwrap();
         wtxn.commit().unwrap();
 
         // Check that there is **always** 3 documents.
@@ -694,10 +703,11 @@ mod tests {
             update_method: IndexDocumentsMethod::UpdateDocuments,
             ..Default::default()
         };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -722,9 +732,10 @@ mod tests {
         // Second we send 1 document with id 1, to force it to be merged with the previous one.
         let mut wtxn = index.write_txn().unwrap();
         let content = documents!([ { "id": 1, "age": 25 } ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -764,7 +775,7 @@ mod tests {
         ]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
         assert!(builder.add_documents(content).is_err());
         wtxn.commit().unwrap();
@@ -793,10 +804,11 @@ mod tests {
         let config = IndexerConfig::default();
         let indexing_config =
             IndexDocumentsConfig { autogenerate_docids: true, ..Default::default() };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -813,9 +825,10 @@ mod tests {
         // Second we send 1 document with the generated uuid, to erase the previous ones.
         let mut wtxn = index.write_txn().unwrap();
         let content = documents!([ { "name": "updated kevin", "id": kevin_uuid } ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -854,9 +867,10 @@ mod tests {
         ]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -871,9 +885,10 @@ mod tests {
         let content = documents!([ { "name": "new kevin" } ]);
         let indexing_config =
             IndexDocumentsConfig { autogenerate_docids: true, ..Default::default() };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -896,9 +911,10 @@ mod tests {
         let content = documents!([]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -922,7 +938,7 @@ mod tests {
         let content = documents!([ { "id": "brume bleue", "name": "kevin" } ]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
         assert!(builder.add_documents(content).is_err());
@@ -932,9 +948,10 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         // There is a space in the document id.
         let content = documents!([ { "id": 32, "name": "kevin" } ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -961,9 +978,10 @@ mod tests {
         ]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1007,9 +1025,10 @@ mod tests {
             update_method: IndexDocumentsMethod::ReplaceDocuments,
             ..Default::default()
         };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1018,7 +1037,7 @@ mod tests {
             update_method: IndexDocumentsMethod::UpdateDocuments,
             ..Default::default()
         };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
         let documents = documents!([
           {
@@ -1028,7 +1047,8 @@ mod tests {
           }
         ]);
 
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
     }
@@ -1055,9 +1075,10 @@ mod tests {
             update_method: IndexDocumentsMethod::ReplaceDocuments,
             ..Default::default()
         };
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1097,10 +1118,11 @@ mod tests {
           { "id": 2, "_geo": { "lng": "42" }, "_geo.lat": "31" },
           { "id": 3, "_geo.lat": 31, "_geo.lng": "42" },
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1136,10 +1158,11 @@ mod tests {
         let documents = documents!([
           { "id": 0, "_geo": { "lng": 42 } }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         let error = builder.execute().unwrap_err();
         assert_eq!(
             &error.to_string(),
@@ -1149,10 +1172,11 @@ mod tests {
         let documents = documents!([
           { "id": 0, "_geo": { "lat": 42 } }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         let error = builder.execute().unwrap_err();
         assert_eq!(
             &error.to_string(),
@@ -1162,10 +1186,11 @@ mod tests {
         let documents = documents!([
           { "id": 0, "_geo": { "lat": "lol", "lng": 42 } }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         let error = builder.execute().unwrap_err();
         assert_eq!(
             &error.to_string(),
@@ -1175,10 +1200,11 @@ mod tests {
         let documents = documents!([
           { "id": 0, "_geo": { "lat": [12, 13], "lng": 42 } }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         let error = builder.execute().unwrap_err();
         assert_eq!(
             &error.to_string(),
@@ -1188,10 +1214,11 @@ mod tests {
         let documents = documents!([
           { "id": 0, "_geo": { "lat": 12, "lng": "hello" } }
         ]);
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(documents).unwrap();
+        let (builder, user_error) = builder.add_documents(documents).unwrap();
+        user_error.unwrap();
         let error = builder.execute().unwrap_err();
         assert_eq!(
             &error.to_string(),
@@ -1215,10 +1242,11 @@ mod tests {
         ]);
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         assert_eq!(index.primary_key(&wtxn).unwrap(), Some("objectId"));
@@ -1235,10 +1263,11 @@ mod tests {
             { "objectId": 30,  "title": "Hamlet", "_geo": { "lat": 12, "lng": 89 } }
         ]);
 
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         let external_documents_ids = index.external_documents_ids(&wtxn).unwrap();
         assert!(external_documents_ids.get("30").is_some());
@@ -1247,10 +1276,11 @@ mod tests {
             { "objectId": 30,  "title": "Hamlet", "_geo": { "lat": 12, "lng": 89 } }
         ]);
 
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1279,10 +1309,11 @@ mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1313,10 +1344,11 @@ mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1371,10 +1403,11 @@ mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1424,10 +1457,11 @@ mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1556,10 +1590,11 @@ mod tests {
         ]);
 
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1626,10 +1661,11 @@ mod tests {
         // index the documents
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1718,10 +1754,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1735,10 +1772,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1757,10 +1795,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1785,10 +1824,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1830,10 +1870,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
     }
@@ -1868,10 +1909,11 @@ mod tests {
         let mut wtxn = index.write_txn().unwrap();
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         // Create one long document
@@ -1882,10 +1924,11 @@ mod tests {
         // Index this one long document
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
 
         wtxn.commit().unwrap();
@@ -1899,7 +1942,7 @@ mod tests {
         let index = Index::new(options, tmp).unwrap();
         let mut wtxn = index.write_txn().unwrap();
         let indexer_config = IndexerConfig::default();
-        let mut builder = IndexDocuments::new(
+        let builder = IndexDocuments::new(
             &mut wtxn,
             &index,
             &indexer_config,
@@ -1928,8 +1971,10 @@ mod tests {
             "branch_id_number": 0
         }]};
 
-        builder.add_documents(doc1).unwrap();
-        builder.add_documents(doc2).unwrap();
+        let (builder, user_error) = builder.add_documents(doc1).unwrap();
+        user_error.unwrap();
+        let (builder, user_error) = builder.add_documents(doc2).unwrap();
+        user_error.unwrap();
 
         builder.execute().unwrap();
 

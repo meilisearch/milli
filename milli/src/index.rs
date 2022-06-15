@@ -1173,10 +1173,11 @@ pub(crate) mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1195,7 +1196,7 @@ pub(crate) mod tests {
         // we add all the documents a second time. we are supposed to get the same
         // field_distribution in the end
         let mut wtxn = index.write_txn().unwrap();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
         let content = documents!([
@@ -1203,7 +1204,8 @@ pub(crate) mod tests {
             { "id": 2, "name": "bob", "age": 20 },
             { "id": 2, "name": "bob", "age": 20 },
         ]);
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1226,10 +1228,11 @@ pub(crate) mod tests {
         ]);
 
         let mut wtxn = index.write_txn().unwrap();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1294,10 +1297,11 @@ pub(crate) mod tests {
 
         let config = IndexerConfig::default();
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
@@ -1351,10 +1355,11 @@ pub(crate) mod tests {
         ]);
 
         let indexing_config = IndexDocumentsConfig::default();
-        let mut builder =
+        let builder =
             IndexDocuments::new(&mut wtxn, &index, &config, indexing_config.clone(), |_| ())
                 .unwrap();
-        builder.add_documents(content).unwrap();
+        let (builder, user_error) = builder.add_documents(content).unwrap();
+        user_error.unwrap();
         builder.execute().unwrap();
         wtxn.commit().unwrap();
 
