@@ -59,6 +59,7 @@ pub enum ErrorKind<'a> {
     MalformedValue,
     InOpeningBracket,
     InClosingBracket,
+    ReservedKeyword(String),
     MissingClosingDelimiter(char),
     Char(char),
     InternalError(error::ErrorKind),
@@ -111,12 +112,11 @@ impl<'a> ParseError<Span<'a>> for Error<'a> {
 impl<'a> Display for Error<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let input = self.context.fragment();
-
         // When printing our error message we want to escape all `\n` to be sure we keep our format with the
         // first line being the diagnostic and the second line being the incriminated filter.
         let escaped_input = input.escape_debug();
 
-        match self.kind {
+        match &self.kind {
             ErrorKind::ExpectedValue if input.trim().is_empty() => {
                 writeln!(f, "Was expecting a value but instead got nothing.")?
             }
@@ -146,6 +146,9 @@ impl<'a> Display for Error<'a> {
             }
             ErrorKind::MisusedGeo => {
                 writeln!(f, "The `_geoRadius` filter is an operation and can't be used as a value.")?
+            }
+            ErrorKind::ReservedKeyword(word) => {
+                writeln!(f, "`{word}` is a reserved keyword and thus cannot be used as a field name unless it is put inside quotes. Use \"{word}\" or \'{word}\' instead.")?
             }
             ErrorKind::InOpeningBracket => {
                 writeln!(f, "Expected `[` after `IN` keyword.")?

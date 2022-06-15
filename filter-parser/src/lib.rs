@@ -204,9 +204,6 @@ fn parse_in(input: Span) -> IResult<FilterCondition> {
         Error::new_from_kind(input, ErrorKind::InClosingBracket)
     })(input)?;
 
-
-    // let mut els_parser = delimited(tag("["), parse_value_list, tag("]"));
-    // let (input, content) = els_parser(input)?;
     let filter = FilterCondition::In { fid: value, els: content };
     Ok((input, filter))
 }
@@ -217,9 +214,19 @@ fn parse_not_in(input: Span) -> IResult<FilterCondition> {
     let (input, _) = multispace1(input)?;
     let (input, _) = ws(tag("IN"))(input)?;
 
-    let mut els_parser = delimited(tag("["), parse_value_list, tag("]"));
 
-    let (input, content) = els_parser(input)?;
+    // everything after `IN` can be a failure
+    let (input, _) = cut_with_err(tag("["), |_| {
+        Error::new_from_kind(input, ErrorKind::InOpeningBracket)
+    })(input)?;
+
+    let (input, content) = cut(parse_value_list)(input)?;
+    
+    // everything after `IN` can be a failure
+    let (input, _) = cut_with_err(tag("]"), |_| {
+        Error::new_from_kind(input, ErrorKind::InClosingBracket)
+    })(input)?;
+
     let filter = FilterCondition::Not(Box::new(FilterCondition::In { fid: value, els: content }));
     Ok((input, filter))
 }
@@ -331,6 +338,9 @@ fn parse_primary(input: Span) -> IResult<FilterCondition> {
     ))(input)
     // if the inner parsers did not match enough information to return an accurate error
     .map_err(|e| e.map_err(|_| Error::new_from_kind(input, ErrorKind::InvalidPrimary)))
+
+    // TODO: if the filter starts with a reserved keyword that is not NOT, then we should return the reserved keyword error
+    // TODO: if the filter is x = reserved, idem
 }
 
 /// expression     = or
@@ -362,6 +372,13 @@ pub mod tests {
 
         let test_case = [
             // simple test
+            (
+                "x = AND",
+                Fc::Not(Box::new(Fc::Not(Box::new(Fc::In { 
+                    fid: rtok("NOT NOT", "colour"), 
+                    els: vec![] 
+                }))))
+            ),
             (
                 "colour IN[]",
                 Fc::In { 
@@ -754,6 +771,7 @@ pub mod tests {
             ("channel = ponce AND'dog' != 'bernese mountain'", "Found unexpected characters at the end of the filter: `AND\\'dog\\' != \\'bernese mountain\\'`. You probably forgot an `OR` or an `AND` rule."),
             ("colour IN blue, green]", "Expected `[` after `IN` keyword."),
             ("colour IN [blue, green", "Expected matching `]` after value list given to `IN[`."),
+            ("colour IN ['blue, green", "Expression `\\'blue, green` is missing the following closing delimiter: `'`."),
         ];
 
         for (input, expected) in test_case {
