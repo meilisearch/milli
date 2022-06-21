@@ -369,7 +369,7 @@ impl<'a> Filter<'a> {
                     }
                 } else {
                     return Err(fid.as_external_error(FilterError::AttributeNotFilterable {
-                        attribute: fid,
+                        attribute: fid.value(),
                         filterable_fields,
                     }))?;
                 }
