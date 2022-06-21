@@ -123,7 +123,8 @@ impl Member {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, jayson::DeserializeFromValue)]
+#[jayson(from(&String) = FromStr::from_str -> AscDescError)]
 pub enum AscDesc {
     Asc(Member),
     Desc(Member),

@@ -12,6 +12,7 @@ use milli::update::UpdateIndexingStep::{
     ComputeIdsAndMergeDocuments, IndexDocuments, MergeDataIntoFinalDatabase, RemapDocumentAddition,
 };
 use milli::update::{self, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig};
+use milli::Criterion;
 use milli::Index;
 use serde_json::{Map, Value};
 use structopt::StructOpt;
@@ -466,7 +467,7 @@ struct SettingsUpdate {
     #[structopt(long)]
     filterable_attributes: Option<Vec<String>>,
     #[structopt(long)]
-    criteria: Option<Vec<String>>,
+    criteria: Option<Vec<Criterion>>,
     #[structopt(long)]
     exact_attributes: Option<Vec<String>>,
     #[structopt(long)]

@@ -3,6 +3,7 @@ use std::result::Result as StdResult;
 
 use charabia::{Tokenizer, TokenizerBuilder};
 use itertools::Itertools;
+use jayson::DeserializeFromValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::OffsetDateTime;
 
@@ -20,6 +21,24 @@ pub enum Setting<T> {
     Set(T),
     Reset,
     NotSet,
+}
+impl<T, E> DeserializeFromValue<E> for Setting<T>
+where
+    E: jayson::DeserializeError,
+    T: DeserializeFromValue<E>,
+{
+    fn deserialize_from_value<V: jayson::IntoValue>(
+        value: jayson::Value<V>,
+        location: jayson::ValuePointerRef,
+    ) -> StdResult<Self, E> {
+        match value {
+            jayson::Value::Null => Ok(Setting::Reset),
+            v => T::deserialize_from_value(v, location).map(Setting::Set),
+        }
+    }
+    fn default() -> Option<Self> {
+        Some(Setting::NotSet)
+    }
 }
 
 impl<T> Default for Setting<T> {
@@ -93,7 +112,7 @@ pub struct Settings<'a, 't, 'u, 'i> {
     displayed_fields: Setting<Vec<String>>,
     filterable_fields: Setting<HashSet<String>>,
     sortable_fields: Setting<HashSet<String>>,
-    criteria: Setting<Vec<String>>,
+    criteria: Setting<Vec<Criterion>>,
     stop_words: Setting<BTreeSet<String>>,
     distinct_field: Setting<String>,
     synonyms: Setting<HashMap<String, Vec<String>>>,
@@ -173,7 +192,7 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
         self.criteria = Setting::Reset;
     }
 
-    pub fn set_criteria(&mut self, criteria: Vec<String>) {
+    pub fn set_criteria(&mut self, criteria: Vec<Criterion>) {
         self.criteria = Setting::Set(criteria);
     }
 
@@ -509,13 +528,8 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 
     fn update_criteria(&mut self) -> Result<()> {
         match self.criteria {
-            Setting::Set(ref fields) => {
-                let mut new_criteria = Vec::new();
-                for name in fields {
-                    let criterion: Criterion = name.parse()?;
-                    new_criteria.push(criterion);
-                }
-                self.index.put_criteria(self.wtxn, &new_criteria)?;
+            Setting::Set(ref new_criteria) => {
+                self.index.put_criteria(self.wtxn, new_criteria)?;
             }
             Setting::Reset => {
                 self.index.delete_criteria(self.wtxn)?;

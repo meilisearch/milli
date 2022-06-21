@@ -1,10 +1,9 @@
+use crate::{AscDesc, Member};
+use jayson::DeserializeFromValue;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-use crate::{AscDesc, Member};
 
 #[derive(Error, Debug)]
 pub enum CriterionError {
@@ -24,7 +23,8 @@ pub enum CriterionError {
     ReservedNameForFilter { name: String },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, DeserializeFromValue)]
+#[jayson(from(&String) = FromStr::from_str -> CriterionError)]
 pub enum Criterion {
     /// Sorted by decreasing number of matched query terms.
     /// Query words at the front of an attribute is considered better than if it was at the back.
