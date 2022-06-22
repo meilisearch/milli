@@ -1,9 +1,12 @@
-use crate::{AscDesc, Member};
-use jayson::DeserializeFromValue;
-use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
+
+use jayson::DeserializeFromValue;
+use serde::de::Unexpected;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::{AscDesc, Member};
 
 #[derive(Error, Debug)]
 pub enum CriterionError {
@@ -23,7 +26,7 @@ pub enum CriterionError {
     ReservedNameForFilter { name: String },
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, DeserializeFromValue)]
+#[derive(Debug, Clone, PartialEq, Eq, DeserializeFromValue)]
 #[jayson(from(&String) = FromStr::from_str -> CriterionError)]
 pub enum Criterion {
     /// Sorted by decreasing number of matched query terms.
@@ -104,6 +107,28 @@ impl fmt::Display for Criterion {
             Asc(attr) => write!(f, "{}:asc", attr),
             Desc(attr) => write!(f, "{}:desc", attr),
         }
+    }
+}
+impl Serialize for Criterion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_string().serialize(serializer)
+    }
+}
+impl<'de> Deserialize<'de> for Criterion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string = String::deserialize(deserializer)?;
+        Self::from_str(&string)
+            .map_err(|_| serde::de::Error::invalid_value(
+                Unexpected::Str(&string),
+                &"one of `words`, `typo`, `proximity`, `attribute`, `sort`, `exactness`, `<field>:asc`, or `<field>:desc`"
+                )
+            )
     }
 }
 

@@ -344,7 +344,7 @@ fn criteria_mixup() {
         //update criteria
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, &config);
-        builder.set_criteria(criteria.iter().map(ToString::to_string).collect());
+        builder.set_criteria(criteria.clone());
         builder.execute(|_| ()).unwrap();
         wtxn.commit().unwrap();
 
@@ -435,7 +435,7 @@ fn criteria_ascdesc() {
 
         let mut wtxn = index.write_txn().unwrap();
         let mut builder = Settings::new(&mut wtxn, &index, &config);
-        builder.set_criteria(vec![criterion.to_string()]);
+        builder.set_criteria(vec![criterion.clone()]);
         builder.execute(|_| ()).unwrap();
         wtxn.commit().unwrap();
 

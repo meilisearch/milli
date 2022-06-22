@@ -25,8 +25,8 @@ use milli::update::{
     ClearDocuments, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig, Setting,
 };
 use milli::{
-    obkv_to_json, CompressionType, Filter as MilliFilter, FilterCondition, FormatOptions, Index,
-    MatcherBuilder, SearchResult, SortError,
+    obkv_to_json, CompressionType, Criterion, Filter as MilliFilter, FilterCondition,
+    FormatOptions, Index, MatcherBuilder, SearchResult, SortError,
 };
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
@@ -467,7 +467,13 @@ async fn main() -> anyhow::Result<()> {
 
                     // We transpose the settings JSON struct into a real setting update.
                     match settings.criteria {
-                        Setting::Set(criteria) => builder.set_criteria(criteria),
+                        Setting::Set(criteria) => {
+                            let criteria = criteria
+                                .iter()
+                                .map(|s| Criterion::from_str(&s))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            builder.set_criteria(criteria)
+                        }
                         Setting::Reset => builder.reset_criteria(),
                         Setting::NotSet => (),
                     }

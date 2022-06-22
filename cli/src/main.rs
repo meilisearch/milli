@@ -12,8 +12,7 @@ use milli::update::UpdateIndexingStep::{
     ComputeIdsAndMergeDocuments, IndexDocuments, MergeDataIntoFinalDatabase, RemapDocumentAddition,
 };
 use milli::update::{self, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig};
-use milli::Criterion;
-use milli::Index;
+use milli::{Criterion, Index};
 use serde_json::{Map, Value};
 use structopt::StructOpt;
 

@@ -79,8 +79,6 @@ pub fn base_setup(conf: &Conf) -> Index {
         builder.reset_filterable_fields();
         builder.reset_criteria();
         builder.reset_stop_words();
-
-        let criterion = criterion.iter().map(|s| s.to_string()).collect();
         builder.set_criteria(criterion);
     }
 
