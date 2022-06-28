@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
 use byteorder::ReadBytesExt;
 use fxhash::FxHashMap;
+use grenad::ChunkCreator;
 use heed::RoTxn;
-use itertools::Itertools;
 use obkv::{KvReader, KvWriter};
 use roaring::RoaringBitmap;
 use serde_json::Value;
@@ -15,13 +15,13 @@ use smartstring::SmartString;
 
 use super::helpers::{create_sorter, create_writer, keep_latest_obkv, merge_obkvs, MergeFn};
 use super::{IndexDocumentsMethod, IndexerConfig};
-use crate::documents::{DocumentsBatchIndex, EnrichedDocument, EnrichedDocumentsBatchReader};
+use crate::documents::{EnrichedDocument, EnrichedDocumentsBatchReader};
 use crate::error::{Error, InternalError, UserError};
 use crate::index::db_name;
 use crate::update::{AvailableDocumentsIds, UpdateIndexingStep};
 use crate::{
     ExternalDocumentsIds, FieldDistribution, FieldId, FieldIdMapMissingEntry, FieldsIdsMap, Index,
-    Result, BEU32,
+    Object, Result, BEU32,
 };
 
 pub struct TransformOutput {
@@ -60,27 +60,39 @@ pub struct Transform<'a, 'i> {
     documents_count: usize,
 }
 
-/// Create a mapping between the field ids found in the document batch and the one that were
-/// already present in the index.
-///
-/// If new fields are present in the addition, they are added to the index field ids map.
-fn create_fields_mapping(
-    index_field_map: &mut FieldsIdsMap,
-    batch_field_map: &DocumentsBatchIndex,
-) -> Result<HashMap<FieldId, FieldId>> {
-    batch_field_map
-        .iter()
-        // we sort by id here to ensure a deterministic mapping of the fields, that preserves
-        // the original ordering.
-        .sorted_by_key(|(&id, _)| id)
-        .map(|(field, name)| match index_field_map.id(&name) {
-            Some(id) => Ok((*field, id)),
-            None => index_field_map
-                .insert(&name)
-                .ok_or(Error::UserError(UserError::AttributeLimitReached))
-                .map(|id| (*field, id)),
+/// Inserts the given document as obkv into the sorter. The key associated with the document
+/// in the sorter is the given docid.
+fn write_document_to_sorter_as_obkv<MF, CC>(
+    document: Object,
+    docid: u32,
+    fields_ids_map: &FieldsIdsMap,
+    sorter: &mut grenad::Sorter<MF, CC>,
+) -> Result<()>
+where
+    CC: ChunkCreator,
+    MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> std::result::Result<Cow<'a, [u8]>, Error>,
+{
+    // Note: this could be faster by not creating a new vector all the time
+    let mut document_obkv = Vec::new();
+    let mut document_writer_to_obkv = obkv::KvWriter::new(&mut document_obkv);
+
+    // Insertion in an obkv must be done in order
+    let mut sorted_document = document
+        .into_iter()
+        .map(|(k, v)| {
+            // Note: that's potentially expensive as well
+            let field_id = fields_ids_map.id(k.as_str()).unwrap();
+            // Note: and this as well, would be better to use serde_json::to_writer
+            let value_bytes = serde_json::to_vec(&v).unwrap();
+            (field_id, value_bytes)
         })
-        .collect()
+        .collect::<Box<[_]>>(); // and this as well, we can also reuse it
+    sorted_document.sort_unstable_by(|x, y| x.0.cmp(&y.0));
+    for (k, v) in sorted_document.iter() {
+        document_writer_to_obkv.insert(*k, v)?;
+    }
+    sorter.insert(&docid.to_be_bytes(), document_obkv)?;
+    Ok(())
 }
 
 impl<'a, 'i> Transform<'a, 'i> {
@@ -144,70 +156,22 @@ impl<'a, 'i> Transform<'a, 'i> {
         F: Fn(UpdateIndexingStep) + Sync,
     {
         let mut cursor = reader.into_cursor();
-        let fields_index = cursor.documents_batch_index();
         let external_documents_ids = self.index.external_documents_ids(wtxn)?;
-
-        let mapping = create_fields_mapping(&mut self.fields_ids_map, fields_index)?;
-
         let primary_key = cursor.primary_key().to_string();
-        let primary_key_id_nested = primary_key.contains('.');
-        let primary_key_id =
-            self.fields_ids_map.insert(&primary_key).ok_or(UserError::AttributeLimitReached)?;
-
-        let mut flattened_document = None;
-        let mut obkv_buffer = Vec::new();
-        let mut flattened_obkv_buffer = Vec::new();
         let mut documents_count = 0;
-        let mut field_buffer: Vec<(u16, Cow<[u8]>)> = Vec::new();
-        while let Some(enriched_document) = cursor.next_enriched_document()? {
-            let EnrichedDocument { document, document_id } = enriched_document;
 
-            let mut field_buffer_cache = drop_and_reuse(field_buffer);
+        while let Some(enriched_document) = cursor.next_enriched_document()? {
+            let EnrichedDocument { mut document, document_id } = enriched_document;
+
             if self.indexer_settings.log_every_n.map_or(false, |len| documents_count % len == 0) {
                 progress_callback(UpdateIndexingStep::RemapDocumentAddition {
                     documents_seen: documents_count,
                 });
             }
 
-            // When the document id has been auto-generated by the `enrich_documents_batch`
-            // we must insert this document id into the remaped document.
             let external_id = document_id.value();
             if document_id.is_generated() {
-                let docid = serde_json::to_vec(external_id).map_err(InternalError::SerdeJson)?;
-                field_buffer_cache.push((primary_key_id, Cow::from(docid)));
-            }
-
-            for (k, v) in document.iter() {
-                let mapped_id =
-                    *mapping.get(&k).ok_or(InternalError::FieldIdMappingMissingEntry { key: k })?;
-                field_buffer_cache.push((mapped_id, Cow::from(v)));
-            }
-
-            // We need to make sure that every document has a primary key. After we have remapped
-            // all the fields in the document, we try to find the primary key value. If we can find
-            // it, transform it into a string and validate it, and then update it in the
-            // document. If none is found, and we were told to generate missing document ids, then
-            // we create the missing field, and update the new document.
-            if primary_key_id_nested {
-                let mut field_buffer_cache = field_buffer_cache.clone();
-                self.flatten_from_field_mapping(
-                    &mapping,
-                    &document,
-                    &mut flattened_obkv_buffer,
-                    &mut field_buffer_cache,
-                )?;
-                flattened_document = Some(&flattened_obkv_buffer);
-            }
-
-            // Insertion in a obkv need to be done with keys ordered. For now they are ordered
-            // according to the document addition key order, so we sort it according to the
-            // fieldids map keys order.
-            field_buffer_cache.sort_unstable_by(|(f1, _), (f2, _)| f1.cmp(&f2));
-
-            // Build the new obkv document.
-            let mut writer = obkv::KvWriter::new(&mut obkv_buffer);
-            for (k, v) in field_buffer_cache.iter() {
-                writer.insert(*k, v)?;
+                document.insert(primary_key.clone(), Value::String(external_id.to_owned()));
             }
 
             let (docid, should_insert_original_document) =
@@ -250,35 +214,55 @@ impl<'a, 'i> Transform<'a, 'i> {
                     })?;
 
                 self.original_sorter.insert(&docid.to_be_bytes(), base_obkv)?;
-                match self.flatten_from_fields_ids_map(KvReader::new(&base_obkv))? {
-                    Some(buffer) => self.flattened_sorter.insert(docid.to_be_bytes(), &buffer)?,
-                    None => self.flattened_sorter.insert(docid.to_be_bytes(), base_obkv)?,
+
+                // now we also append the flattened document into the sorter, which is done by:
+                // 1. converting the base_obkv to json
+                // 2. flattening the json
+                // 3. writing it into the flattened sorter
+                let reader = KvReader::new(base_obkv);
+                let mut document = Object::new();
+                for (field_id, value) in reader.iter() {
+                    let key = self.fields_ids_map.name(field_id).unwrap(); // TODO: error handling
+                    let value: Value = serde_json::from_slice(value).unwrap(); // TODO: error handling
+                    document.insert(key.to_string(), value);
                 }
+                let flattened_document = flatten_serde_json::flatten(&document);
+                write_document_to_sorter_as_obkv(
+                    flattened_document,
+                    docid,
+                    &self.fields_ids_map,
+                    &mut self.flattened_sorter,
+                )?;
             } else {
                 self.new_documents_ids.insert(docid);
             }
 
-            // We use the extracted/generated user id as the key for this document.
-            self.original_sorter.insert(&docid.to_be_bytes(), obkv_buffer.clone())?;
-            documents_count += 1;
+            let flattened_document = flatten_serde_json::flatten(&document);
 
-            if let Some(flatten) = flattened_document {
-                self.flattened_sorter.insert(docid.to_be_bytes(), &flatten)?;
-            } else {
-                match self.flatten_from_fields_ids_map(KvReader::new(&obkv_buffer))? {
-                    Some(buffer) => self.flattened_sorter.insert(docid.to_be_bytes(), &buffer)?,
-                    None => {
-                        self.flattened_sorter.insert(docid.to_be_bytes(), obkv_buffer.clone())?
-                    }
-                }
+            for key in flattened_document.keys() {
+                self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
             }
+            for key in document.keys() {
+                self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
+            }
+            write_document_to_sorter_as_obkv(
+                flattened_document,
+                docid,
+                &self.fields_ids_map,
+                &mut self.flattened_sorter,
+            )?;
+            write_document_to_sorter_as_obkv(
+                document,
+                docid,
+                &self.fields_ids_map,
+                &mut self.original_sorter,
+            )?;
+
+            documents_count += 1;
 
             progress_callback(UpdateIndexingStep::RemapDocumentAddition {
                 documents_seen: documents_count,
             });
-
-            field_buffer = drop_and_reuse(field_buffer_cache);
-            obkv_buffer.clear();
         }
 
         progress_callback(UpdateIndexingStep::RemapDocumentAddition {
@@ -291,180 +275,6 @@ impl<'a, 'i> Transform<'a, 'i> {
         // Now that we have a valid sorter that contains the user id and the obkv we
         // give it to the last transforming function which returns the TransformOutput.
         Ok(documents_count)
-    }
-
-    // Flatten a document from the fields ids map contained in self and insert the new
-    // created fields. Returns `None` if the document doesn't need to be flattened.
-    fn flatten_from_fields_ids_map(&mut self, obkv: KvReader<FieldId>) -> Result<Option<Vec<u8>>> {
-        if obkv
-            .iter()
-            .all(|(_, value)| !json_depth_checker::should_flatten_from_unchecked_slice(value))
-        {
-            return Ok(None);
-        }
-
-        // store the keys and values the original obkv + the flattened json
-        // We first extract all the key+value out of the obkv. If a value is not nested
-        // we keep a reference on its value. If the value is nested we'll get its value
-        // as an owned `Vec<u8>` after flattening it.
-        let mut key_value: Vec<(FieldId, Cow<[u8]>)> = Vec::new();
-
-        // the object we're going to use to store the fields that need to be flattened.
-        let mut doc = serde_json::Map::new();
-
-        // we recreate a json containing only the fields that needs to be flattened.
-        // all the raw values get inserted directly in the `key_value` vec.
-        for (key, value) in obkv.iter() {
-            if json_depth_checker::should_flatten_from_unchecked_slice(value) {
-                let key = self.fields_ids_map.name(key).ok_or(FieldIdMapMissingEntry::FieldId {
-                    field_id: key,
-                    process: "Flatten from fields ids map.",
-                })?;
-
-                let value = serde_json::from_slice::<Value>(value)
-                    .map_err(crate::error::InternalError::SerdeJson)?;
-                doc.insert(key.to_string(), value);
-            } else {
-                key_value.push((key, value.into()));
-            }
-        }
-
-        let flattened = flatten_serde_json::flatten(&doc);
-
-        // Once we have the flattened version we insert all the new generated fields_ids
-        // (if any) in the fields ids map and serialize the value.
-        for (key, value) in flattened.into_iter() {
-            let fid = self.fields_ids_map.insert(&key).ok_or(UserError::AttributeLimitReached)?;
-            let value = serde_json::to_vec(&value).map_err(InternalError::SerdeJson)?;
-            key_value.push((fid, value.into()));
-        }
-
-        // we sort the key. If there was a conflict between the obkv and the new generated value the
-        // keys will be consecutive.
-        key_value.sort_unstable_by_key(|(key, _)| *key);
-
-        let mut buffer = Vec::new();
-        Self::create_obkv_from_key_value(&mut key_value, &mut buffer)?;
-        Ok(Some(buffer))
-    }
-
-    // Flatten a document from a field mapping generated by [create_fields_mapping]
-    fn flatten_from_field_mapping(
-        &mut self,
-        mapping: &HashMap<FieldId, FieldId>,
-        obkv: &KvReader<FieldId>,
-        output_buffer: &mut Vec<u8>,
-        field_buffer_cache: &mut Vec<(u16, Cow<[u8]>)>,
-    ) -> Result<()> {
-        // store the keys and values of the json + the original obkv
-        let mut key_value: Vec<(FieldId, Cow<[u8]>)> = Vec::new();
-
-        // if the primary_key is nested we need to flatten the document before being able to do anything
-        let mut doc = serde_json::Map::new();
-
-        // we recreate a json containing only the fields that needs to be flattened.
-        // all the raw values get inserted directly in the `key_value` vec.
-        for (key, value) in obkv.iter() {
-            if json_depth_checker::should_flatten_from_unchecked_slice(value) {
-                let key =
-                    mapping.get(&key).ok_or(InternalError::FieldIdMappingMissingEntry { key })?;
-                let key =
-                    self.fields_ids_map.name(*key).ok_or(FieldIdMapMissingEntry::FieldId {
-                        field_id: *key,
-                        process: "Flatten from field mapping.",
-                    })?;
-                let value = serde_json::from_slice::<serde_json::Value>(value)
-                    .map_err(InternalError::SerdeJson)?;
-                doc.insert(key.to_string(), value);
-            } else {
-                key_value.push((key, value.into()));
-            }
-        }
-
-        let flattened = flatten_serde_json::flatten(&doc);
-
-        // Once we have the flattened version we insert all the new generated fields_ids
-        // (if any) in the fields ids map and serialize the value.
-        for (key, value) in flattened.into_iter() {
-            let fid = self.fields_ids_map.insert(&key).ok_or(UserError::AttributeLimitReached)?;
-            let value = serde_json::to_vec(&value).map_err(InternalError::SerdeJson)?;
-            key_value.push((fid, value.clone().into()));
-
-            if field_buffer_cache.iter().find(|(id, _)| *id == fid).is_none() {
-                field_buffer_cache.push((fid, value.into()));
-            }
-        }
-
-        // we sort the key. If there was a conflict between the obkv and the new generated value the
-        // keys will be consecutive.
-        key_value.sort_unstable_by_key(|(key, _)| *key);
-
-        Self::create_obkv_from_key_value(&mut key_value, output_buffer)?;
-        Ok(())
-    }
-
-    /// Generate an obkv from a slice of key / value sorted by key.
-    fn create_obkv_from_key_value(
-        key_value: &mut [(FieldId, Cow<[u8]>)],
-        output_buffer: &mut Vec<u8>,
-    ) -> Result<()> {
-        debug_assert!(
-            key_value.windows(2).all(|vec| vec[0].0 <= vec[1].0),
-            "The slice of key / value pair must be sorted."
-        );
-
-        output_buffer.clear();
-        let mut writer = KvWriter::new(output_buffer);
-
-        let mut skip_next_value = false;
-        for things in key_value.windows(2) {
-            if skip_next_value {
-                skip_next_value = false;
-                continue;
-            }
-            let (key1, value1) = &things[0];
-            let (key2, value2) = &things[1];
-
-            // now we're going to look for conflicts between the keys. For example the following documents would cause a conflict:
-            // { "doggo.name": "jean", "doggo": { "name": "paul" } }
-            // we should find a first "doggo.name" from the obkv and a second one from the flattening.
-            // but we must generate the following document:
-            // { "doggo.name": ["jean", "paul"] }
-            // thus we're going to merge the value from the obkv and the flattened document in a single array and skip the next
-            // iteration.
-            if key1 == key2 {
-                skip_next_value = true;
-
-                let value1 = serde_json::from_slice(value1)
-                    .map_err(crate::error::InternalError::SerdeJson)?;
-                let value2 = serde_json::from_slice(value2)
-                    .map_err(crate::error::InternalError::SerdeJson)?;
-                let value = match (value1, value2) {
-                    (Value::Array(mut left), Value::Array(mut right)) => {
-                        left.append(&mut right);
-                        Value::Array(left)
-                    }
-                    (Value::Array(mut array), value) | (value, Value::Array(mut array)) => {
-                        array.push(value);
-                        Value::Array(array)
-                    }
-                    (left, right) => Value::Array(vec![left, right]),
-                };
-
-                let value = serde_json::to_vec(&value).map_err(InternalError::SerdeJson)?;
-                writer.insert(*key1, value)?;
-            } else {
-                writer.insert(*key1, value1)?;
-            }
-        }
-
-        if !skip_next_value {
-            // the unwrap is safe here, we know there was at least one value in the document
-            let (key, value) = key_value.last().unwrap();
-            writer.insert(*key, value)?;
-        }
-
-        Ok(())
     }
 
     /// Generate the `TransformOutput` based on the given sorter that can be generated from any
@@ -698,17 +508,6 @@ impl<'a, 'i> Transform<'a, 'i> {
             flattened_documents,
         })
     }
-}
-
-/// Drops all the value of type `U` in vec, and reuses the allocation to create a `Vec<T>`.
-///
-/// The size and alignment of T and U must match.
-fn drop_and_reuse<U, T>(mut vec: Vec<U>) -> Vec<T> {
-    debug_assert_eq!(std::mem::align_of::<U>(), std::mem::align_of::<T>());
-    debug_assert_eq!(std::mem::size_of::<U>(), std::mem::size_of::<T>());
-    vec.clear();
-    debug_assert!(vec.is_empty());
-    vec.into_iter().map(|_| unreachable!()).collect()
 }
 
 impl TransformOutput {

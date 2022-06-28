@@ -1,10 +1,9 @@
 use std::convert::TryInto;
 use std::{error, fmt, io};
 
-use obkv::KvReader;
+use crate::Object;
 
-use super::{DocumentsBatchIndex, Error, DOCUMENTS_BATCH_INDEX_KEY};
-use crate::FieldId;
+use super::Error;
 
 /// The `DocumentsBatchReader` provides a way to iterate over documents that have been created with
 /// a `DocumentsBatchWriter`.
@@ -13,7 +12,6 @@ use crate::FieldId;
 /// `FieldId`. The mapping between the field ids and the field names is done thanks to the index.
 pub struct DocumentsBatchReader<R> {
     cursor: grenad::ReaderCursor<R>,
-    fields_index: DocumentsBatchIndex,
 }
 
 impl<R: io::Read + io::Seek> DocumentsBatchReader<R> {
@@ -23,32 +21,23 @@ impl<R: io::Read + io::Seek> DocumentsBatchReader<R> {
     /// method to iterator over the documents, from the first to the last.
     pub fn from_reader(reader: R) -> Result<Self, Error> {
         let reader = grenad::Reader::new(reader)?;
-        let mut cursor = reader.into_cursor()?;
+        let cursor = reader.into_cursor()?;
 
-        let fields_index = match cursor.move_on_key_equal_to(DOCUMENTS_BATCH_INDEX_KEY)? {
-            Some((_, value)) => serde_json::from_slice(value).map_err(Error::Serialize)?,
-            None => return Err(Error::InvalidDocumentFormat),
-        };
-
-        Ok(DocumentsBatchReader { cursor, fields_index })
+        Ok(DocumentsBatchReader { cursor })
     }
 
     pub fn documents_count(&self) -> u32 {
-        self.cursor.len().saturating_sub(1).try_into().expect("Invalid number of documents")
+        self.cursor.len().try_into().expect("Invalid number of documents")
     }
 
     pub fn is_empty(&self) -> bool {
-        self.cursor.len().saturating_sub(1) == 0
-    }
-
-    pub fn documents_batch_index(&self) -> &DocumentsBatchIndex {
-        &self.fields_index
+        self.cursor.len() == 0
     }
 
     /// This method returns a forward cursor over the documents.
     pub fn into_cursor(self) -> DocumentsBatchCursor<R> {
-        let DocumentsBatchReader { cursor, fields_index } = self;
-        let mut cursor = DocumentsBatchCursor { cursor, fields_index };
+        let DocumentsBatchReader { cursor } = self;
+        let mut cursor = DocumentsBatchCursor { cursor };
         cursor.reset();
         cursor
     }
@@ -57,17 +46,12 @@ impl<R: io::Read + io::Seek> DocumentsBatchReader<R> {
 /// A forward cursor over the documents in a `DocumentsBatchReader`.
 pub struct DocumentsBatchCursor<R> {
     cursor: grenad::ReaderCursor<R>,
-    fields_index: DocumentsBatchIndex,
 }
 
 impl<R> DocumentsBatchCursor<R> {
     pub fn into_reader(self) -> DocumentsBatchReader<R> {
-        let DocumentsBatchCursor { cursor, fields_index, .. } = self;
-        DocumentsBatchReader { cursor, fields_index }
-    }
-
-    pub fn documents_batch_index(&self) -> &DocumentsBatchIndex {
-        &self.fields_index
+        let DocumentsBatchCursor { cursor } = self;
+        DocumentsBatchReader { cursor }
     }
 
     /// Resets the cursor to be able to read from the start again.
@@ -79,14 +63,13 @@ impl<R> DocumentsBatchCursor<R> {
 impl<R: io::Read + io::Seek> DocumentsBatchCursor<R> {
     /// Returns the next document, starting from the first one. Subsequent calls to
     /// `next_document` advance the document reader until all the documents have been read.
-    pub fn next_document(
-        &mut self,
-    ) -> Result<Option<KvReader<FieldId>>, DocumentsBatchCursorError> {
+    pub fn next_document(&mut self) -> Result<Option<Object>, DocumentsBatchCursorError> {
         match self.cursor.move_on_next()? {
-            Some((key, value)) if key != DOCUMENTS_BATCH_INDEX_KEY => {
-                Ok(Some(KvReader::new(value)))
+            Some((_, value)) => {
+                let json = serde_json::from_slice(value)?;
+                Ok(Some(json))
             }
-            _otherwise => Ok(None),
+            None => Ok(None),
         }
     }
 }

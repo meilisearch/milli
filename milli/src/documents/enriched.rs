@@ -1,14 +1,9 @@
 use std::fs::File;
 use std::{io, str};
 
-use obkv::KvReader;
-
-use super::{
-    DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchIndex, DocumentsBatchReader,
-    Error,
-};
+use super::{DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader, Error};
 use crate::update::DocumentId;
-use crate::FieldId;
+use crate::Object;
 
 /// The `EnrichedDocumentsBatchReader` provides a way to iterate over documents that have
 /// been created with a `DocumentsBatchWriter` and, for the enriched data,
@@ -51,10 +46,6 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchReader<R> {
         self.documents.is_empty()
     }
 
-    pub fn documents_batch_index(&self) -> &DocumentsBatchIndex {
-        self.documents.documents_batch_index()
-    }
-
     /// This method returns a forward cursor over the enriched documents.
     pub fn into_cursor(self) -> EnrichedDocumentsBatchCursor<R> {
         let EnrichedDocumentsBatchReader { documents, primary_key, mut external_ids } = self;
@@ -68,8 +59,8 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchReader<R> {
 }
 
 #[derive(Debug, Clone)]
-pub struct EnrichedDocument<'a> {
-    pub document: KvReader<'a, FieldId>,
+pub struct EnrichedDocument {
+    pub document: Object,
     pub document_id: DocumentId,
 }
 
@@ -91,10 +82,6 @@ impl<R> EnrichedDocumentsBatchCursor<R> {
 
     pub fn primary_key(&self) -> &str {
         &self.primary_key
-    }
-
-    pub fn documents_batch_index(&self) -> &DocumentsBatchIndex {
-        self.documents.documents_batch_index()
     }
 
     /// Resets the cursor to be able to read from the start again.

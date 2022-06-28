@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::{Read, Seek};
 use std::result::Result as StdResult;
 use std::{fmt, iter};
@@ -5,10 +6,10 @@ use std::{fmt, iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::documents::{DocumentsBatchIndex, DocumentsBatchReader, EnrichedDocumentsBatchReader};
+use crate::documents::{DocumentsBatchReader, EnrichedDocumentsBatchReader};
 use crate::error::{GeoError, InternalError, UserError};
-use crate::update::index_documents::{obkv_to_object, writer_into_reader};
-use crate::{FieldId, Index, Object, Result};
+use crate::update::index_documents::writer_into_reader;
+use crate::{Index, Object, Result};
 
 /// The symbol used to define levels in a nested primary key.
 const PRIMARY_KEY_SPLIT_SYMBOL: char = '.';
@@ -28,7 +29,7 @@ pub fn enrich_documents_batch<R: Read + Seek>(
     reader: DocumentsBatchReader<R>,
 ) -> Result<StdResult<EnrichedDocumentsBatchReader<R>, UserError>> {
     let mut cursor = reader.into_cursor();
-    let mut documents_batch_index = cursor.documents_batch_index().clone();
+
     let mut external_ids = tempfile::tempfile().map(grenad::Writer::new)?;
     let mut uuid_buffer = [0; uuid::adapter::Hyphenated::LENGTH];
 
@@ -38,50 +39,38 @@ pub fn enrich_documents_batch<R: Read + Seek>(
         Some(primary_key) if primary_key.contains(PRIMARY_KEY_SPLIT_SYMBOL) => {
             PrimaryKey::nested(primary_key)
         }
-        Some(primary_key) => match documents_batch_index.id(primary_key) {
-            Some(id) => PrimaryKey::flat(primary_key, id),
-            None if autogenerate_docids => {
-                PrimaryKey::flat(primary_key, documents_batch_index.insert(primary_key))
-            }
-            None => {
-                return match cursor.next_document()? {
-                    Some(first_document) => Ok(Err(UserError::MissingDocumentId {
-                        primary_key: primary_key.to_string(),
-                        document: obkv_to_object(&first_document, &documents_batch_index)?,
-                    })),
-                    None => Ok(Err(UserError::MissingPrimaryKey)),
-                };
-            }
-        },
+        Some(primary_key) => PrimaryKey::flat(primary_key),
         None => {
-            let guessed = documents_batch_index
-                .iter()
-                .filter(|(_, name)| name.to_lowercase().contains(DEFAULT_PRIMARY_KEY))
-                .min_by_key(|(fid, _)| *fid);
-            match guessed {
-                Some((id, name)) => PrimaryKey::flat(name.as_str(), *id),
-                None if autogenerate_docids => PrimaryKey::flat(
-                    DEFAULT_PRIMARY_KEY,
-                    documents_batch_index.insert(DEFAULT_PRIMARY_KEY),
-                ),
-                None => return Ok(Err(UserError::MissingPrimaryKey)),
+            // here we look at the first document to see if it has a primary key
+            let mut primary_key_from_first_doc = None;
+            if let Some(first_document) = cursor.next_document()? {
+                for key in first_document.keys() {
+                    if key.to_lowercase().contains(DEFAULT_PRIMARY_KEY) {
+                        primary_key_from_first_doc = Some(key.clone());
+                        break;
+                    }
+                }
+            };
+            if let Some(primary_key_from_first_doc) = primary_key_from_first_doc {
+                PrimaryKey::flat_owned(primary_key_from_first_doc)
+            } else if autogenerate_docids {
+                PrimaryKey::flat(DEFAULT_PRIMARY_KEY)
+            } else {
+                return Ok(Err(UserError::MissingPrimaryKey));
             }
         }
     };
+    cursor.reset();
 
     // If the settings specifies that a _geo field must be used therefore we must check the
-    // validity of it in all the documents of this batch and this is when we return `Some`.
-    let geo_field_id = match documents_batch_index.id("_geo") {
-        Some(geo_field_id) if index.sortable_fields(rtxn)?.contains("_geo") => Some(geo_field_id),
-        _otherwise => None,
-    };
+    // validity of it in all the documents of this batch
+    let look_for_geo_field = index.sortable_fields(rtxn)?.contains("_geo");
 
     let mut count = 0;
     while let Some(document) = cursor.next_document()? {
         let document_id = match fetch_or_generate_document_id(
             &document,
-            &documents_batch_index,
-            primary_key,
+            &primary_key,
             autogenerate_docids,
             &mut uuid_buffer,
             count,
@@ -90,15 +79,16 @@ pub fn enrich_documents_batch<R: Read + Seek>(
             Err(user_error) => return Ok(Err(user_error)),
         };
 
-        if let Some(geo_value) = geo_field_id.and_then(|fid| document.get(fid)) {
-            if let Err(user_error) = validate_geo_from_json(&document_id, geo_value)? {
-                return Ok(Err(UserError::from(user_error)));
+        if look_for_geo_field {
+            if let Some(geo_value) = document.get("_geo") {
+                if let Err(user_error) = validate_geo_from_json(&document_id, geo_value)? {
+                    return Ok(Err(UserError::from(user_error)));
+                }
             }
         }
 
         let document_id = serde_json::to_vec(&document_id).map_err(InternalError::SerdeJson)?;
         external_ids.insert(count.to_be_bytes(), document_id)?;
-
         count += 1;
     }
 
@@ -115,61 +105,49 @@ pub fn enrich_documents_batch<R: Read + Seek>(
 /// Retrieve the document id after validating it, returning a `UserError`
 /// if the id is invalid or can't be guessed.
 fn fetch_or_generate_document_id(
-    document: &obkv::KvReader<FieldId>,
-    documents_batch_index: &DocumentsBatchIndex,
-    primary_key: PrimaryKey,
+    document: &Object,
+    primary_key: &PrimaryKey,
     autogenerate_docids: bool,
     uuid_buffer: &mut [u8; uuid::adapter::Hyphenated::LENGTH],
     count: u32,
 ) -> Result<StdResult<DocumentId, UserError>> {
     match primary_key {
-        PrimaryKey::Flat { name: primary_key, field_id: primary_key_id } => {
-            match document.get(primary_key_id) {
-                Some(document_id_bytes) => {
-                    let document_id = serde_json::from_slice(document_id_bytes)
-                        .map_err(InternalError::SerdeJson)?;
-                    match validate_document_id_value(document_id)? {
-                        Ok(document_id) => Ok(Ok(DocumentId::retrieved(document_id))),
-                        Err(user_error) => Ok(Err(user_error)),
-                    }
-                }
-                None if autogenerate_docids => {
-                    let uuid = uuid::Uuid::new_v4().to_hyphenated().encode_lower(uuid_buffer);
-                    Ok(Ok(DocumentId::generated(uuid.to_string(), count)))
-                }
-                None => Ok(Err(UserError::MissingDocumentId {
-                    primary_key: primary_key.to_string(),
-                    document: obkv_to_object(&document, &documents_batch_index)?,
-                })),
+        PrimaryKey::Flat { name: primary_key } => match document.get(primary_key.as_ref()) {
+            Some(document_id_value) => match validate_document_id_value(document_id_value)? {
+                Ok(document_id) => Ok(Ok(DocumentId::retrieved(document_id))),
+                Err(user_error) => Ok(Err(user_error)),
+            },
+            None if autogenerate_docids => {
+                let uuid = uuid::Uuid::new_v4().to_hyphenated().encode_lower(uuid_buffer);
+                Ok(Ok(DocumentId::generated(uuid.to_string(), count)))
             }
-        }
+            None => Ok(Err(UserError::MissingDocumentId {
+                primary_key: primary_key.to_string(),
+                document: document.clone(),
+            })),
+        },
         nested @ PrimaryKey::Nested { .. } => {
             let mut matching_documents_ids = Vec::new();
             for (first_level_name, right) in nested.possible_level_names() {
-                if let Some(field_id) = documents_batch_index.id(first_level_name) {
-                    if let Some(value_bytes) = document.get(field_id) {
-                        let object = serde_json::from_slice(value_bytes)
-                            .map_err(InternalError::SerdeJson)?;
-                        fetch_matching_values(object, right, &mut matching_documents_ids);
-
-                        if matching_documents_ids.len() >= 2 {
-                            return Ok(Err(UserError::TooManyDocumentIds {
-                                primary_key: nested.name().to_string(),
-                                document: obkv_to_object(&document, &documents_batch_index)?,
-                            }));
-                        }
-                    }
+                if let Some(sub_value) = document.get(first_level_name) {
+                    fetch_matching_values(sub_value, right, &mut matching_documents_ids);
+                }
+                if matching_documents_ids.len() >= 2 {
+                    return Ok(Err(UserError::TooManyDocumentIds {
+                        primary_key: nested.name().to_string(),
+                        document: document.clone(),
+                    }));
                 }
             }
 
             match matching_documents_ids.pop() {
-                Some(document_id) => match validate_document_id_value(document_id)? {
+                Some(document_id) => match validate_document_id_value(&document_id)? {
                     Ok(document_id) => Ok(Ok(DocumentId::retrieved(document_id))),
                     Err(user_error) => Ok(Err(user_error)),
                 },
                 None => Ok(Err(UserError::MissingDocumentId {
                     primary_key: nested.name().to_string(),
-                    document: obkv_to_object(&document, &documents_batch_index)?,
+                    document: document.clone(),
                 })),
             }
         }
@@ -178,19 +156,22 @@ fn fetch_or_generate_document_id(
 
 /// A type that represent the type of primary key that has been set
 /// for this index, a classic flat one or a nested one.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum PrimaryKey<'a> {
-    Flat { name: &'a str, field_id: FieldId },
-    Nested { name: &'a str },
+    Flat { name: Cow<'a, str> },
+    Nested { name: Cow<'a, str> },
 }
 
 impl PrimaryKey<'_> {
-    fn flat(name: &str, field_id: FieldId) -> PrimaryKey {
-        PrimaryKey::Flat { name, field_id }
+    fn flat(name: &str) -> PrimaryKey {
+        PrimaryKey::Flat { name: Cow::Borrowed(name) }
+    }
+    fn flat_owned<'a>(name: String) -> PrimaryKey<'a> {
+        PrimaryKey::Flat { name: Cow::Owned(name) }
     }
 
     fn nested(name: &str) -> PrimaryKey {
-        PrimaryKey::Nested { name }
+        PrimaryKey::Nested { name: Cow::Borrowed(name) }
     }
 
     fn name(&self) -> &str {
@@ -263,18 +244,18 @@ fn contained_in(selector: &str, key: &str) -> bool {
             .unwrap_or(true)
 }
 
-pub fn fetch_matching_values(value: Value, selector: &str, output: &mut Vec<Value>) {
+pub fn fetch_matching_values<'a>(value: &'a Value, selector: &str, output: &mut Vec<&'a Value>) {
     match value {
         Value::Object(object) => fetch_matching_values_in_object(object, selector, "", output),
         otherwise => output.push(otherwise),
     }
 }
 
-pub fn fetch_matching_values_in_object(
-    object: Object,
+pub fn fetch_matching_values_in_object<'a>(
+    object: &'a Object,
     selector: &str,
     base_key: &str,
-    output: &mut Vec<Value>,
+    output: &mut Vec<&'a Value>,
 ) {
     for (key, value) in object {
         let base_key = if base_key.is_empty() {
@@ -312,12 +293,14 @@ pub fn validate_document_id(document_id: &str) -> Option<&str> {
 }
 
 /// Parses a Json encoded document id and validate it, returning a user error when it is one.
-pub fn validate_document_id_value(document_id: Value) -> Result<StdResult<String, UserError>> {
+pub fn validate_document_id_value(document_id: &Value) -> Result<StdResult<String, UserError>> {
     match document_id {
         Value::String(string) => match validate_document_id(&string) {
-            Some(s) if s.len() == string.len() => Ok(Ok(string)),
+            Some(s) if s.len() == string.len() => Ok(Ok(string.clone())),
             Some(s) => Ok(Ok(s.to_string())),
-            None => Ok(Err(UserError::InvalidDocumentId { document_id: Value::String(string) })),
+            None => {
+                Ok(Err(UserError::InvalidDocumentId { document_id: Value::String(string.clone()) }))
+            }
         },
         Value::Number(number) if number.is_i64() => Ok(Ok(number.to_string())),
         content => Ok(Err(UserError::InvalidDocumentId { document_id: content.clone() })),
@@ -326,19 +309,22 @@ pub fn validate_document_id_value(document_id: Value) -> Result<StdResult<String
 
 /// Try to extract an `f64` from a JSON `Value` and return the `Value`
 /// in the `Err` variant if it failed.
-pub fn extract_float_from_value(value: Value) -> StdResult<f64, Value> {
+pub fn extract_float_from_value(value: &Value) -> StdResult<f64, Value> {
     match value {
-        Value::Number(ref n) => n.as_f64().ok_or(value),
-        Value::String(ref s) => s.parse::<f64>().map_err(|_| value),
-        value => Err(value),
+        Value::Number(ref n) => n.as_f64().ok_or_else(|| value.clone()),
+        Value::String(ref s) => s.parse::<f64>().map_err(|_| value.clone()),
+        value => Err(value.clone()),
     }
 }
 
-pub fn validate_geo_from_json(id: &DocumentId, bytes: &[u8]) -> Result<StdResult<(), GeoError>> {
+pub fn validate_geo_from_json(
+    id: &DocumentId,
+    geo_value: &Value,
+) -> Result<StdResult<(), GeoError>> {
     use GeoError::*;
     let debug_id = || Value::from(id.debug());
-    match serde_json::from_slice(bytes).map_err(InternalError::SerdeJson)? {
-        Value::Object(mut object) => match (object.remove("lat"), object.remove("lng")) {
+    match geo_value {
+        Value::Object(object) => match (object.get("lat"), object.get("lng")) {
             (Some(lat), Some(lng)) => {
                 match (extract_float_from_value(lat), extract_float_from_value(lng)) {
                     (Ok(_), Ok(_)) => Ok(Ok(())),
@@ -353,6 +339,6 @@ pub fn validate_geo_from_json(id: &DocumentId, bytes: &[u8]) -> Result<StdResult
             (Some(_), None) => Ok(Err(MissingLongitude { document_id: debug_id() })),
             (None, None) => Ok(Err(MissingLatitudeAndLongitude { document_id: debug_id() })),
         },
-        value => Ok(Err(NotAnObject { document_id: debug_id(), value })),
+        value => Ok(Err(NotAnObject { document_id: debug_id(), value: value.clone() })),
     }
 }

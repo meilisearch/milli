@@ -41,12 +41,12 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
         if let Some((lat, lng)) = lat.zip(lng) {
             // then we extract the values
             let lat = extract_float_from_value(
-                serde_json::from_slice(lat).map_err(InternalError::SerdeJson)?,
+                &serde_json::from_slice(lat).map_err(InternalError::SerdeJson)?,
             )
             .map_err(|lat| GeoError::BadLatitude { document_id: document_id(), value: lat })?;
 
             let lng = extract_float_from_value(
-                serde_json::from_slice(lng).map_err(InternalError::SerdeJson)?,
+                &serde_json::from_slice(lng).map_err(InternalError::SerdeJson)?,
             )
             .map_err(|lng| GeoError::BadLongitude { document_id: document_id(), value: lng })?;
 

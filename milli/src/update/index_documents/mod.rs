@@ -32,7 +32,7 @@ pub use self::helpers::{
 };
 use self::helpers::{grenad_obkv_into_chunks, GrenadParameters};
 pub use self::transform::{Transform, TransformOutput};
-use crate::documents::{obkv_to_object, DocumentsBatchReader};
+use crate::documents::DocumentsBatchReader;
 use crate::error::UserError;
 pub use crate::update::index_documents::helpers::CursorClonableMmap;
 use crate::update::{
@@ -150,7 +150,6 @@ where
             Ok(reader) => reader,
             Err(user_error) => return Ok((self, Err(user_error))),
         };
-
         let indexed_documents = self
             .transform
             .as_mut()
@@ -159,7 +158,6 @@ where
             as u64;
 
         self.added_documents += indexed_documents;
-
         Ok((self, Ok(indexed_documents)))
     }
 

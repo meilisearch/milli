@@ -16,10 +16,6 @@ use serde::{Deserialize, Serialize};
 use crate::error::{FieldIdMapMissingEntry, InternalError};
 use crate::{FieldId, Object, Result};
 
-/// The key that is used to store the `DocumentsBatchIndex` datastructure,
-/// it is the absolute last key of the list.
-const DOCUMENTS_BATCH_INDEX_KEY: [u8; 8] = u64::MAX.to_be_bytes();
-
 /// Helper function to convert an obkv reader into a JSON object.
 pub fn obkv_to_object(obkv: &KvReader<FieldId>, index: &DocumentsBatchIndex) -> Result<Object> {
     obkv.iter()
@@ -182,7 +178,7 @@ macro_rules! documents {
 mod test {
     use std::io::Cursor;
 
-    use serde_json::{json, Value};
+    use serde_json::json;
 
     use super::*;
 
@@ -205,7 +201,7 @@ mod test {
         let mut documents =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        assert_eq!(documents.documents_batch_index().iter().count(), 5);
+        // assert_eq!(documents.documents_batch_index().iter().count(), 5);
         let reader = documents.next_document().unwrap().unwrap();
         assert_eq!(reader.iter().count(), 5);
         assert!(documents.next_document().unwrap().is_none());
@@ -227,7 +223,7 @@ mod test {
 
         let mut documents =
             DocumentsBatchReader::from_reader(io::Cursor::new(vector)).unwrap().into_cursor();
-        assert_eq!(documents.documents_batch_index().iter().count(), 2);
+
         let reader = documents.next_document().unwrap().unwrap();
         assert_eq!(reader.iter().count(), 1);
         assert!(documents.next_document().unwrap().is_some());
@@ -244,8 +240,8 @@ mod test {
 
         let mut cursor = docs_reader.into_cursor();
         let doc = cursor.next_document().unwrap().unwrap();
-        let nested: Value = serde_json::from_slice(doc.get(0).unwrap()).unwrap();
-        assert_eq!(nested, json!({ "toto": ["hello"] }));
+        let nested = doc.get("hello").unwrap();
+        assert_eq!(nested, &json!({ "toto": ["hello"] }));
     }
 
     #[test]
