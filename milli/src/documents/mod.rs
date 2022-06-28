@@ -1,4 +1,5 @@
 mod builder;
+mod document_visitor;
 mod enriched;
 mod reader;
 

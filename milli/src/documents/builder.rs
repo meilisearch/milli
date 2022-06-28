@@ -1,9 +1,10 @@
-use super::Error;
+use crate::documents::document_visitor::DocumentVisitor;
+use crate::documents::Error;
 use crate::Object;
 use grenad::{CompressionType, WriterBuilder};
+use serde::de::Deserializer;
 use serde_json::{Number, Value};
 use std::io::{self, Write};
-
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///
@@ -54,6 +55,16 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         self.writer.insert(internal_id, &self.value_buffer)?;
         self.documents_count += 1;
         Ok(())
+    }
+
+    /// Extends the builder with json documents from a reader.
+    pub fn append_json<R: io::Read>(&mut self, reader: R) -> Result<(), Error> {
+        let mut de = serde_json::Deserializer::from_reader(reader);
+        let mut object_buffer = Object::new();
+        let mut visitor =
+            DocumentVisitor { batch_builder: self, object_buffer: &mut object_buffer };
+
+        de.deserialize_any(&mut visitor).map_err(Error::Json)?
     }
 
     /// Appends a new CSV file into the batch
