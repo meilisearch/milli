@@ -1,12 +1,8 @@
-use std::io::{self, Write};
-
-use grenad::{CompressionType, WriterBuilder};
-use serde_json::{Number, Value};
-// use serde_json::{to_writer, Value};
-
-// use super::{DocumentsBatchIndex, Error};
 use super::Error;
 use crate::Object;
+use grenad::{CompressionType, WriterBuilder};
+use serde_json::{Number, Value};
+use std::io::{self, Write};
 
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
@@ -50,7 +46,7 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         self.documents_count
     }
 
-    /// Appends a new JSON object into the batch and updates the `DocumentsBatchIndex` accordingly.
+    /// Appends a new JSON object into the batch
     pub fn append_json_object(&mut self, object: &Object) -> io::Result<()> {
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
@@ -60,9 +56,8 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         Ok(())
     }
 
-    /// Appends a new CSV file into the batch and updates the `DocumentsBatchIndex` accordingly.
+    /// Appends a new CSV file into the batch
     pub fn append_csv<R: io::Read>(&mut self, mut reader: csv::Reader<R>) -> Result<(), Error> {
-        // Make sure that we insert the fields ids in order as the obkv writer has this requirement.
         let fields: Vec<(String, AllowedType)> =
             reader.headers()?.into_iter().map(parse_csv_header).collect();
 
@@ -126,7 +121,7 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         Ok(())
     }
 
-    /// Flushes the content on disk and stores the final version of the `DocumentsBatchIndex`.
+    /// Flushes the content on disk
     pub fn into_inner(self) -> io::Result<W> {
         self.writer.into_inner()
     }
