@@ -1,9 +1,8 @@
 use std::convert::TryInto;
 use std::{error, fmt, io};
 
-use crate::Object;
-
 use super::Error;
+use crate::Object;
 
 /// The `DocumentsBatchReader` provides a way to iterate over documents that have been created with
 /// a `DocumentsBatchWriter`.

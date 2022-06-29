@@ -1,16 +1,24 @@
 use std::fs::File;
-use std::{io, str};
+use std::{fmt, io, str};
 
-use super::{DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader, Error};
+use crate::documents::{DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader};
 use crate::update::DocumentId;
 use crate::Object;
 
-/// The `EnrichedDocumentsBatchReader` provides a way to iterate over documents that have
-/// been created with a `DocumentsBatchWriter` and, for the enriched data,
-/// a simple `grenad::Reader<File>`.
+#[derive(Debug, Clone, Copy)]
+pub struct InvalidEnrichedData;
+impl fmt::Display for InvalidEnrichedData {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "Invalid enriched data")
+    }
+}
+impl std::error::Error for InvalidEnrichedData {}
+
+/// The `EnrichedDocumentsBatchReader` provides a way to iterate over the enriched documents created
+/// by the [`enrich_documents_batch`](crate::update::index_documents::enrich_documents_batch) function.
 ///
-/// The documents are returned in the form of `obkv::Reader` where each field is identified with a
-/// `FieldId`. The mapping between the field ids and the field names is done thanks to the index.
+/// Call [`self.into_cursor()`](Self::into_cursor) to iterate over the enriched documents and access
+/// other information stored in `self`.
 pub struct EnrichedDocumentsBatchReader<R> {
     documents: DocumentsBatchReader<R>,
     primary_key: String,
@@ -22,7 +30,7 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchReader<R> {
         documents: DocumentsBatchReader<R>,
         primary_key: String,
         external_ids: grenad::Reader<File>,
-    ) -> Result<Self, Error> {
+    ) -> Result<Self, crate::error::Error> {
         if documents.documents_count() as u64 == external_ids.len() {
             Ok(EnrichedDocumentsBatchReader {
                 documents,
@@ -30,20 +38,8 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchReader<R> {
                 external_ids: external_ids.into_cursor()?,
             })
         } else {
-            Err(Error::InvalidEnrichedData)
+            Err(InvalidEnrichedData.into())
         }
-    }
-
-    pub fn documents_count(&self) -> u32 {
-        self.documents.documents_count()
-    }
-
-    pub fn primary_key(&self) -> &str {
-        &self.primary_key
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.documents.is_empty()
     }
 
     /// This method returns a forward cursor over the enriched documents.
@@ -71,23 +67,8 @@ pub struct EnrichedDocumentsBatchCursor<R> {
 }
 
 impl<R> EnrichedDocumentsBatchCursor<R> {
-    pub fn into_reader(self) -> EnrichedDocumentsBatchReader<R> {
-        let EnrichedDocumentsBatchCursor { documents, primary_key, external_ids } = self;
-        EnrichedDocumentsBatchReader {
-            documents: documents.into_reader(),
-            primary_key,
-            external_ids,
-        }
-    }
-
     pub fn primary_key(&self) -> &str {
         &self.primary_key
-    }
-
-    /// Resets the cursor to be able to read from the start again.
-    pub fn reset(&mut self) {
-        self.documents.reset();
-        self.external_ids.reset();
     }
 }
 

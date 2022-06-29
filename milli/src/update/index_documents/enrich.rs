@@ -6,8 +6,9 @@ use std::{fmt, iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::documents::{DocumentsBatchReader, EnrichedDocumentsBatchReader};
+use crate::documents::DocumentsBatchReader;
 use crate::error::{GeoError, InternalError, UserError};
+use crate::update::index_documents::enriched::EnrichedDocumentsBatchReader;
 use crate::update::index_documents::writer_into_reader;
 use crate::{Index, Object, Result};
 

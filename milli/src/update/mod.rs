@@ -4,6 +4,7 @@ pub use self::delete_documents::{DeleteDocuments, DocumentDeletionResult};
 pub use self::facets::Facets;
 pub use self::index_documents::{
     DocumentAdditionResult, DocumentId, IndexDocuments, IndexDocumentsConfig, IndexDocumentsMethod,
+    InvalidEnrichedData,
 };
 pub use self::indexer_config::IndexerConfig;
 pub use self::settings::{Setting, Settings};

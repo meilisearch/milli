@@ -8,6 +8,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::documents::{self, DocumentsBatchCursorError};
+use crate::update::InvalidEnrichedData;
 use crate::{CriterionError, DocumentId, FieldId, Object, SortError};
 
 pub fn is_reserved_keyword(keyword: &str) -> bool {
@@ -46,6 +47,8 @@ pub enum InternalError {
     IndexingMergingKeys { process: &'static str },
     #[error("{}", HeedError::InvalidDatabaseTyping)]
     InvalidDatabaseTyping,
+    #[error(transparent)]
+    InvalidEnrichedData(#[from] InvalidEnrichedData),
     #[error(transparent)]
     RayonThreadPool(#[from] ThreadPoolBuildError),
     #[error(transparent)]
@@ -186,6 +189,7 @@ error_from_sub_error! {
     FieldIdMapMissingEntry => InternalError,
     fst::Error => InternalError,
     documents::Error => InternalError,
+    InvalidEnrichedData => InternalError,
     str::Utf8Error => InternalError,
     ThreadPoolBuildError => InternalError,
     SerializationError => InternalError,

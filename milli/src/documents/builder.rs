@@ -1,10 +1,13 @@
-use crate::documents::document_visitor::DocumentVisitor;
-use crate::documents::Error;
-use crate::Object;
+use std::io;
+use std::io::Write;
+
 use grenad::{CompressionType, WriterBuilder};
 use serde::de::Deserializer;
 use serde_json::{Number, Value};
-use std::io::{self, Write};
+
+use crate::documents::document_visitor::DocumentVisitor;
+use crate::documents::Error;
+use crate::Object;
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///
@@ -48,7 +51,7 @@ impl<W: Write> DocumentsBatchBuilder<W> {
     }
 
     /// Appends a new JSON object into the batch
-    pub fn append_json_object(&mut self, object: &Object) -> io::Result<()> {
+    pub fn append_json_object(&mut self, object: &Object) -> Result<(), Error> {
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
         serde_json::to_writer(&mut self.value_buffer, object)?;
@@ -57,13 +60,14 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         Ok(())
     }
 
-    /// Extends the builder with json documents from a reader.
+    /// Appends new json documents from a reader. The reader may contain a Json object
+    /// or an array of Json objects.
     pub fn append_json<R: io::Read>(&mut self, reader: R) -> Result<(), Error> {
         let mut de = serde_json::Deserializer::from_reader(reader);
-        let mut object_buffer = Object::new();
-        let mut visitor =
-            DocumentVisitor { batch_builder: self, object_buffer: &mut object_buffer };
+        let mut visitor = DocumentVisitor { batch_builder: self };
 
+        // The result of `deserialize_any` is StdResult<Result<(), Error>, serde_json::Error>
+        // See the documentqtion of DocumentVisitor for an explanation
         de.deserialize_any(&mut visitor).map_err(Error::Json)?
     }
 

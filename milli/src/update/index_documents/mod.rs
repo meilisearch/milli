@@ -1,4 +1,5 @@
 mod enrich;
+mod enriched;
 mod extract;
 mod helpers;
 mod transform;
@@ -24,6 +25,7 @@ pub use self::enrich::{
     extract_float_from_value, validate_document_id, validate_document_id_value,
     validate_geo_from_json, DocumentId,
 };
+pub use self::enriched::InvalidEnrichedData;
 pub use self::helpers::{
     as_cloneable_grenad, create_sorter, create_writer, fst_stream_into_hashset,
     fst_stream_into_vec, merge_cbo_roaring_bitmaps, merge_roaring_bitmaps,

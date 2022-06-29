@@ -1,97 +1,18 @@
 mod builder;
 mod document_visitor;
-mod enriched;
 mod reader;
 
 use std::fmt::{self, Debug};
 use std::io;
-use std::str::Utf8Error;
 
-use bimap::BiHashMap;
 pub use builder::DocumentsBatchBuilder;
-pub use enriched::{EnrichedDocument, EnrichedDocumentsBatchCursor, EnrichedDocumentsBatchReader};
-use obkv::KvReader;
 pub use reader::{DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader};
-use serde::{Deserialize, Serialize};
-
-use crate::error::{FieldIdMapMissingEntry, InternalError};
-use crate::{FieldId, Object, Result};
-
-/// Helper function to convert an obkv reader into a JSON object.
-pub fn obkv_to_object(obkv: &KvReader<FieldId>, index: &DocumentsBatchIndex) -> Result<Object> {
-    obkv.iter()
-        .map(|(field_id, value)| {
-            let field_name = index.name(field_id).ok_or_else(|| {
-                FieldIdMapMissingEntry::FieldId { field_id, process: "obkv_to_object" }
-            })?;
-            let value = serde_json::from_slice(value).map_err(InternalError::SerdeJson)?;
-            Ok((field_name.to_string(), value))
-        })
-        .collect()
-}
-
-/// A bidirectional map that links field ids to their name in a document batch.
-#[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub struct DocumentsBatchIndex(pub BiHashMap<FieldId, String>);
-
-impl DocumentsBatchIndex {
-    /// Insert the field in the map, or return it's field id if it doesn't already exists.
-    pub fn insert(&mut self, field: &str) -> FieldId {
-        match self.0.get_by_right(field) {
-            Some(field_id) => *field_id,
-            None => {
-                let field_id = self.0.len() as FieldId;
-                self.0.insert(field_id, field.to_string());
-                field_id
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn iter(&self) -> bimap::hash::Iter<FieldId, String> {
-        self.0.iter()
-    }
-
-    pub fn name(&self, id: FieldId) -> Option<&str> {
-        self.0.get_by_left(&id).map(AsRef::as_ref)
-    }
-
-    pub fn id(&self, name: &str) -> Option<FieldId> {
-        self.0.get_by_right(name).cloned()
-    }
-
-    pub fn recreate_json(&self, document: &obkv::KvReaderU16) -> Result<Object> {
-        let mut map = Object::new();
-
-        for (k, v) in document.iter() {
-            // TODO: TAMO: update the error type
-            let key =
-                self.0.get_by_left(&k).ok_or(crate::error::InternalError::DatabaseClosing)?.clone();
-            let value = serde_json::from_slice::<serde_json::Value>(v)
-                .map_err(crate::error::InternalError::SerdeJson)?;
-            map.insert(key, value);
-        }
-
-        Ok(map)
-    }
-}
 
 #[derive(Debug)]
 pub enum Error {
     ParseFloat { error: std::num::ParseFloatError, line: usize, value: String },
-    InvalidDocumentFormat,
-    InvalidEnrichedData,
-    InvalidUtf8(Utf8Error),
     Csv(csv::Error),
     Json(serde_json::Error),
-    Serialize(serde_json::Error),
     Grenad(grenad::Error),
     Io(io::Error),
 }
@@ -120,25 +41,13 @@ impl From<grenad::Error> for Error {
     }
 }
 
-impl From<Utf8Error> for Error {
-    fn from(other: Utf8Error) -> Self {
-        Self::InvalidUtf8(other)
-    }
-}
-
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::ParseFloat { error, line, value } => {
                 write!(f, "Error parsing number {:?} at line {}: {}", value, line, error)
             }
-            Error::InvalidDocumentFormat => {
-                f.write_str("Invalid document addition format, missing the documents batch index.")
-            }
-            Error::InvalidEnrichedData => f.write_str("Invalid enriched data."),
-            Error::InvalidUtf8(e) => write!(f, "{}", e),
             Error::Io(e) => write!(f, "{}", e),
-            Error::Serialize(e) => write!(f, "{}", e),
             Error::Grenad(e) => write!(f, "{}", e),
             Error::Csv(e) => write!(f, "{}", e),
             Error::Json(e) => write!(f, "{}", e),
