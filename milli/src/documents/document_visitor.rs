@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(result, r#"{"id":{}}"#);
 
         let result = deser(r#"{"id": [1, 2]}"#).unwrap();
-        assert_eq!(result, r#"{"id":[1,2]"#);
+        assert_eq!(result, r#"{"id":[1,2]}"#);
     }
     #[test]
     fn sequence_objects() {
