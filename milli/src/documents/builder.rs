@@ -36,6 +36,27 @@ pub struct DocumentsBatchBuilder<W> {
     value_buffer: Vec<u8>,
 }
 
+#[derive(Default)]
+struct StringAllocations {
+    strings: Vec<String>,
+}
+impl StringAllocations {
+    fn take_one(&mut self) -> String {
+        self.strings.pop().unwrap_or_else(|| String::new())
+    }
+    fn reclaim_from_object(&mut self, object: &mut Object) {
+        for value in object.values_mut() {
+            match value.take() {
+                Value::String(mut s) => {
+                    s.clear();
+                    self.strings.push(s);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl<W: Write> DocumentsBatchBuilder<W> {
     pub fn new(writer: W) -> DocumentsBatchBuilder<W> {
         DocumentsBatchBuilder {
@@ -76,34 +97,39 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         let fields: Vec<(String, AllowedType)> =
             reader.headers()?.into_iter().map(parse_csv_header).collect();
 
+        let mut object = Object::new();
+        for (key, _) in fields.iter() {
+            let key = key.to_string();
+            object.insert(key, Value::Null);
+        }
+
+        let mut string_allocs = StringAllocations::default();
+
         let mut record = csv::StringRecord::new();
         let mut line = 0;
-
-        let mut value_builder = Object::new();
 
         while reader.read_record(&mut record)? {
             // We increment here and not at the end of the while loop to take
             // the header offset into account.
             line += 1;
-            for (i, (field_name, type_)) in fields.iter().enumerate() {
-                let field_name = field_name.clone();
-                self.value_buffer.clear();
-
+            for (i, ((_, type_), value_builder)) in
+                fields.iter().zip(object.values_mut()).enumerate()
+            {
                 let value = &record[i];
                 match type_ {
                     AllowedType::Number => {
-                        if value.trim().is_empty() {
-                            value_builder.insert(field_name, Value::Null);
+                        let trimmed_value = value.trim();
+                        if trimmed_value.is_empty() {
+                            *value_builder = Value::Null;
                         } else {
-                            match value.trim().parse::<f64>() {
+                            match trimmed_value.parse::<f64>() {
                                 Ok(float) => {
                                     if let Some(number) = Number::from_f64(float) {
-                                        value_builder.insert(field_name, Value::Number(number));
+                                        *value_builder = Value::Number(number);
                                     } else {
-                                        value_builder.insert(
-                                            field_name,
-                                            Value::String(value.trim().to_owned()),
-                                        );
+                                        let mut string = string_allocs.take_one();
+                                        string.push_str(trimmed_value);
+                                        *value_builder = Value::String(string);
                                     }
                                 }
                                 Err(error) => {
@@ -118,18 +144,21 @@ impl<W: Write> DocumentsBatchBuilder<W> {
                     }
                     AllowedType::String => {
                         if value.is_empty() {
-                            value_builder.insert(field_name, Value::Null);
+                            *value_builder = Value::Null;
                         } else {
-                            value_builder.insert(field_name, Value::String(value.to_owned()));
+                            let mut string = string_allocs.take_one();
+                            string.push_str(value);
+                            *value_builder = Value::String(string);
                         }
                     }
                 }
             }
 
             let internal_id = self.documents_count.to_be_bytes();
-            serde_json::to_writer(&mut self.value_buffer, &value_builder)?;
-            self.writer.insert(internal_id, &self.value_buffer)?;
             self.value_buffer.clear();
+            serde_json::to_writer(&mut self.value_buffer, &object)?;
+            self.writer.insert(internal_id, &self.value_buffer)?;
+            string_allocs.reclaim_from_object(&mut object);
             self.documents_count += 1;
         }
 
