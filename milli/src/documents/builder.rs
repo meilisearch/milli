@@ -26,7 +26,7 @@ use crate::Object;
 /// let _vector = builder.into_inner().unwrap();
 /// ```
 pub struct DocumentsBatchBuilder<W> {
-    /// The inner grenad writer, the last value must always be the `DocumentsBatchIndex`.
+    /// The inner grenad writer
     writer: grenad::Writer<W>,
     /// The number of documents that were added to this builder,
     /// it doesn't take the primary key of the documents into account at this point.

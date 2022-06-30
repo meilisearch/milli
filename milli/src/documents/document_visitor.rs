@@ -93,3 +93,88 @@ where
         deserializer.deserialize_map(self)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+    use serde::Deserializer;
+
+    fn deser(input: &str) -> Result<String, serde_json::Error> {
+        let mut writer = Vec::new();
+        let mut de = serde_json::Deserializer::from_reader(Cursor::new(input));
+        let mut batch_builder = DocumentsBatchBuilder::new(&mut writer);
+        let mut visitor = DocumentVisitor { batch_builder: &mut batch_builder };
+
+        // The result of `deserialize_any` is StdResult<Result<(), Error>, serde_json::Error>
+        // See the documentqtion of DocumentVisitor for an explanation
+        de.deserialize_any(&mut visitor)?.unwrap();
+
+        let reader = batch_builder.into_inner().unwrap();
+        let reader = grenad::Reader::new(Cursor::new(reader)).unwrap();
+        let mut cursor = reader.into_cursor().unwrap();
+        let mut output = String::new();
+        while let Some((_, value)) = cursor.move_on_next().unwrap() {
+            output.push_str(&String::from_utf8_lossy(value));
+        }
+        Ok(output)
+    }
+
+    // TODO: tests with actual content
+
+    #[test]
+    fn one_object() {
+        let result = deser("{}").unwrap();
+        assert_eq!(result, "{}");
+
+        let result = deser(r#"{"id":1}"#).unwrap();
+        assert_eq!(result, r#"{"id":1}"#);
+
+        let result = deser(r#"{"id": {}}"#).unwrap();
+        assert_eq!(result, r#"{"id":{}}"#);
+
+        let result = deser(r#"{"id": [1, 2]}"#).unwrap();
+        assert_eq!(result, r#"{"id":[1,2]"#);
+    }
+    #[test]
+    fn sequence_objects() {
+        let result = deser("[]").unwrap();
+        assert_eq!(result, "");
+
+        let result = deser(r#"[{"id":1}]"#).unwrap();
+        assert_eq!(result, r#"{"id":1}"#);
+
+        let result = deser(r#"[{"id": {}}, {}, {"hello": [null] }]"#).unwrap();
+        assert_eq!(result, r#"{"id":{}}{}{"hello":[null]}"#);
+    }
+    #[test]
+    fn invalid_documents() {
+        let result = deser("");
+        assert!(result.is_err());
+
+        let result = deser("1");
+        assert!(result.is_err());
+
+        let result = deser(r#""""#);
+        assert!(result.is_err());
+
+        let result = deser(r#"null"#);
+        assert!(result.is_err());
+
+        let result = deser(r#"[1]"#);
+        assert!(result.is_err());
+
+        let result = deser(r#"[null]"#);
+        assert!(result.is_err());
+
+        let result = deser(r#"[""]"#);
+        assert!(result.is_err());
+
+        let result = deser(r#"[[{}]]"#);
+        assert!(result.is_err());
+
+        let result = deser(r#"[{}, 2]"#);
+        assert!(result.is_err());
+    }
+}
