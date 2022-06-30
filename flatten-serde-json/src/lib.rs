@@ -1,11 +1,34 @@
 #![doc = include_str!("../README.md")]
 
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 
-pub fn flatten(json: &Map<String, Value>) -> Map<String, Value> {
-    let mut obj = Map::new();
-    insert_object(&mut obj, None, json);
-    obj
+fn can_be_flattened(object: &Map<String, Value>) -> bool {
+    for value in object.values() {
+        match value {
+            Value::Object(_) => return true,
+            Value::Array(vs) => {
+                for v in vs {
+                    match v {
+                        Value::Object(_) | Value::Array(_) => return true,
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+pub fn flatten<'a>(json: &'a Map<String, Value>) -> Cow<'a, Map<String, Value>> {
+    if can_be_flattened(json) {
+        let mut obj = Map::with_capacity(json.len());
+        insert_object(&mut obj, None, json);
+        Cow::Owned(obj)
+    } else {
+        Cow::Borrowed(json)
+    }
 }
 
 fn insert_object(
@@ -79,13 +102,7 @@ mod tests {
         let json = std::mem::take(base.as_object_mut().unwrap());
         let flat = flatten(&json);
 
-        println!(
-            "got:\n{}\nexpected:\n{}\n",
-            serde_json::to_string_pretty(&flat).unwrap(),
-            serde_json::to_string_pretty(&json).unwrap()
-        );
-
-        assert_eq!(flat, json);
+        assert!(matches!(flat, Cow::Borrowed(_)));
     }
 
     #[test]
@@ -98,7 +115,7 @@ mod tests {
           }
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -122,7 +139,7 @@ mod tests {
           ]
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -143,7 +160,7 @@ mod tests {
           ]
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -165,7 +182,7 @@ mod tests {
           "a.b": "d",
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -188,7 +205,7 @@ mod tests {
           "a.b": "f",
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -196,6 +213,27 @@ mod tests {
                 "a.b": ["c", "d", "f"],
                 "a.c": "e",
                 "a": 35,
+            })
+            .as_object()
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn flatten_simple_nested_arrays() {
+        let mut base: Value = json!({
+          "a": [
+            ["b", "c"],
+            ["f", "g"],
+          ]
+        });
+        let json = std::mem::take(base.as_object_mut().unwrap());
+        let flat = flatten(&json).into_owned();
+
+        assert_eq!(
+            &flat,
+            json!({
+                "a": ["b", "c", "f", "g"],
             })
             .as_object()
             .unwrap()
@@ -217,7 +255,7 @@ mod tests {
           ]
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,
@@ -247,9 +285,7 @@ mod tests {
           ]
         });
         let json = std::mem::take(base.as_object_mut().unwrap());
-        let flat = flatten(&json);
-
-        println!("{}", serde_json::to_string_pretty(&flat).unwrap());
+        let flat = flatten(&json).into_owned();
 
         assert_eq!(
             &flat,

@@ -63,7 +63,7 @@ pub struct Transform<'a, 'i> {
 /// Inserts the given document as obkv into the sorter. The key associated with the document
 /// in the sorter is the given docid.
 fn write_document_to_sorter_as_obkv<MF, CC>(
-    document: Object,
+    document: Cow<'_, Object>,
     docid: u32,
     fields_ids_map: &FieldsIdsMap,
     sorter: &mut grenad::Sorter<MF, CC>,
@@ -72,6 +72,8 @@ where
     CC: ChunkCreator,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> std::result::Result<Cow<'a, [u8]>, Error>,
 {
+    // PERF ! reuse all buffers
+
     // The steps to follow are:
     // 1. Map each key-value pair in the document as follows:
     //      * the key is mapped to its corresponding FieldId using `fields_ids_map`
@@ -84,10 +86,10 @@ where
     let mut document_writer_to_obkv = obkv::KvWriter::new(&mut document_obkv);
 
     let mut sorted_document = document
-        .into_iter()
+        .iter()
         .map(|(k, v)| {
             let field_id = fields_ids_map.id(k.as_str()).unwrap();
-            let value_bytes = serde_json::to_vec(&v).unwrap();
+            let value_bytes = serde_json::to_vec(v).unwrap();
             (field_id, value_bytes)
         })
         .collect::<Box<[_]>>(); // and this as well, we can also reuse it
@@ -267,6 +269,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                     let value: Value = serde_json::from_slice(value).unwrap(); // TODO: error handling
                     document.insert(key.to_string(), value);
                 }
+
                 let flattened_document = flatten_serde_json::flatten(&document);
                 write_document_to_sorter_as_obkv(
                     flattened_document,
@@ -296,7 +299,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                 &mut self.flattened_sorter,
             )?;
             write_document_to_sorter_as_obkv(
-                original_document,
+                Cow::Owned(original_document),
                 internal_id,
                 &self.fields_ids_map,
                 &mut self.original_sorter,
@@ -517,7 +520,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             // insert all the new generated fields_ids (if any) in the fields ids map.
             let mut buffer: Vec<u8> = Vec::new();
             let mut writer = KvWriter::new(&mut buffer);
-            let mut flattened: Vec<_> = flattened.into_iter().collect();
+            let mut flattened: Vec<_> = flattened.iter().collect();
             // we reorder the field to get all the known field first
             flattened.sort_unstable_by_key(|(key, _)| {
                 new_fields_ids_map.id(&key).unwrap_or(FieldId::MAX)
