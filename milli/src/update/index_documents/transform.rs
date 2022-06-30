@@ -60,20 +60,47 @@ pub struct Transform<'a, 'i> {
     documents_count: usize,
 }
 
+/// A helper type to reuse allocations when calling [`write_document_to_sorters_as_obkv`]
+struct WriteDocumentsToSorterBuffers {
+    document_obkv: Vec<u8>,
+    values_bytes: Vec<Vec<u8>>,
+    sorted_documents: Vec<(usize, FieldId)>,
+}
+impl WriteDocumentsToSorterBuffers {
+    fn default() -> Self {
+        Self { document_obkv: vec![], values_bytes: vec![], sorted_documents: vec![] }
+    }
+    fn clear(&mut self, doc_len: usize) {
+        self.document_obkv.clear();
+        for doc in self.values_bytes.iter_mut().take(doc_len) {
+            doc.clear();
+        }
+        self.sorted_documents.clear();
+    }
+    fn get_value_bytes_buffer(&mut self, index: usize) -> &mut Vec<u8> {
+        if index < self.values_bytes.len() {
+            &mut self.values_bytes[index]
+        } else {
+            assert_eq!(self.values_bytes.len(), index);
+            self.values_bytes.push(vec![]);
+            &mut self.values_bytes[index]
+        }
+    }
+}
+
 /// Inserts the given document as obkv into the sorter. The key associated with the document
 /// in the sorter is the given docid.
-fn write_document_to_sorter_as_obkv<MF, CC>(
-    document: Cow<'_, Object>,
+fn write_document_to_sorters_as_obkv<const N: usize, MF, CC>(
+    document: Object,
     docid: u32,
     fields_ids_map: &FieldsIdsMap,
-    sorter: &mut grenad::Sorter<MF, CC>,
+    sorters: [&mut grenad::Sorter<MF, CC>; N],
+    buffers: &mut WriteDocumentsToSorterBuffers,
 ) -> Result<()>
 where
     CC: ChunkCreator,
     MF: for<'a> Fn(&[u8], &[Cow<'a, [u8]>]) -> std::result::Result<Cow<'a, [u8]>, Error>,
 {
-    // PERF ! reuse all buffers
-
     // The steps to follow are:
     // 1. Map each key-value pair in the document as follows:
     //      * the key is mapped to its corresponding FieldId using `fields_ids_map`
@@ -81,23 +108,28 @@ where
     // 2. Sort the result so that the keys (FieldIds) are in order, which is required for insertion into the obkv
     // 3. Make an obkv from the sorted result
     // 4. Insert the obkv into the sorter under the key `docid`
+    buffers.clear(document.len());
 
-    let mut document_obkv = Vec::new();
-    let mut document_writer_to_obkv = obkv::KvWriter::new(&mut document_obkv);
+    for (index, (key, value)) in document.iter().enumerate() {
+        let value_buffer = buffers.get_value_bytes_buffer(index);
+        serde_json::to_writer(value_buffer, value).unwrap();
 
-    let mut sorted_document = document
-        .iter()
-        .map(|(k, v)| {
-            let field_id = fields_ids_map.id(k.as_str()).unwrap();
-            let value_bytes = serde_json::to_vec(v).unwrap();
-            (field_id, value_bytes)
-        })
-        .collect::<Box<[_]>>(); // and this as well, we can also reuse it
-    sorted_document.sort_unstable_by(|x, y| x.0.cmp(&y.0));
-    for (k, v) in sorted_document.iter() {
-        document_writer_to_obkv.insert(*k, v)?;
+        let field_id = fields_ids_map.id(key.as_str()).unwrap();
+        buffers.sorted_documents.push((index, field_id));
     }
-    sorter.insert(&docid.to_be_bytes(), document_obkv)?;
+
+    buffers.sorted_documents.sort_unstable_by(|x, y| x.1.cmp(&y.1));
+
+    let WriteDocumentsToSorterBuffers { document_obkv, values_bytes, sorted_documents } = buffers;
+    let mut document_writer_to_obkv = obkv::KvWriter::new(&mut *document_obkv);
+
+    for (original_index, field_id) in sorted_documents.iter() {
+        let value_bytes = &values_bytes[*original_index];
+        document_writer_to_obkv.insert(*field_id, &value_bytes)?;
+    }
+    for sorter in sorters {
+        sorter.insert(&docid.to_be_bytes(), &document_obkv)?;
+    }
     Ok(())
 }
 
@@ -193,6 +225,8 @@ impl<'a, 'i> Transform<'a, 'i> {
         let primary_key = cursor.primary_key().to_string();
         let mut documents_count = 0;
 
+        let mut write_docs_buffers = WriteDocumentsToSorterBuffers::default();
+
         while let Some(enriched_document) = cursor.next_enriched_document()? {
             let EnrichedDocument { document: mut original_document, document_id: external_id } =
                 enriched_document;
@@ -271,12 +305,20 @@ impl<'a, 'i> Transform<'a, 'i> {
                 }
 
                 let flattened_document = flatten_serde_json::flatten(&document);
-                write_document_to_sorter_as_obkv(
-                    flattened_document,
-                    internal_id,
-                    &self.fields_ids_map,
-                    &mut self.flattened_sorter,
-                )?;
+                match flattened_document {
+                    Cow::Owned(flattened_document) => {
+                        write_document_to_sorters_as_obkv(
+                            flattened_document,
+                            internal_id,
+                            &self.fields_ids_map,
+                            [&mut self.flattened_sorter],
+                            &mut write_docs_buffers,
+                        )?;
+                    }
+                    Cow::Borrowed(_) => {
+                        self.flattened_sorter.insert(&internal_id.to_be_bytes(), base_obkv)?;
+                    }
+                }
             } else {
                 self.new_documents_ids.insert(internal_id);
             }
@@ -292,18 +334,33 @@ impl<'a, 'i> Transform<'a, 'i> {
             }
 
             // Step 4.
-            write_document_to_sorter_as_obkv(
-                flattened_document,
-                internal_id,
-                &self.fields_ids_map,
-                &mut self.flattened_sorter,
-            )?;
-            write_document_to_sorter_as_obkv(
-                Cow::Owned(original_document),
-                internal_id,
-                &self.fields_ids_map,
-                &mut self.original_sorter,
-            )?;
+            match flattened_document {
+                Cow::Borrowed(_) => {
+                    write_document_to_sorters_as_obkv(
+                        original_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.original_sorter, &mut self.flattened_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                }
+                Cow::Owned(flattened_document) => {
+                    write_document_to_sorters_as_obkv(
+                        flattened_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.flattened_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                    write_document_to_sorters_as_obkv(
+                        original_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.original_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                }
+            }
 
             documents_count += 1;
 
