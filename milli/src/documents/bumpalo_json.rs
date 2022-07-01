@@ -24,8 +24,8 @@ use serde::{
 // }
 
 #[derive(Clone, Copy)]
-struct StringBumpSeed<'bump> {
-    bump: &'bump Bump,
+pub struct StringBumpSeed<'bump> {
+    pub bump: &'bump Bump,
 }
 
 struct StringVisitor<'bump> {
@@ -180,8 +180,8 @@ impl<'bump, T> MaybeMut<'bump, T> {
 }
 
 #[derive(Clone, Copy)]
-struct JsonValueBumpSeed<'bump> {
-    bump: &'bump Bump,
+pub struct JsonValueBumpSeed<'bump> {
+    pub bump: &'bump Bump,
 }
 
 impl<'de, 'bump> DeserializeSeed<'de> for JsonValueBumpSeed<'bump> {
@@ -311,6 +311,16 @@ pub fn deserialize_map<'r, 'bump>(
     reader: impl serde_json::de::Read<'r>,
     bump: &'bump Bump,
 ) -> Result<Map<'bump>, serde_json::Error> {
+    let mut de = serde_json::de::Deserializer::new(reader);
+    let visitor = JsonMapVisitor { bump };
+    de.deserialize_any(visitor)
+}
+
+pub fn deserialize_map_slice<'r, 'bump>(
+    s: &'r [u8],
+    bump: &'bump Bump,
+) -> Result<Map<'bump>, serde_json::Error> {
+    let reader = serde_json::de::SliceRead::new(s);
     let mut de = serde_json::de::Deserializer::new(reader);
     let visitor = JsonMapVisitor { bump };
     de.deserialize_any(visitor)

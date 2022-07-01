@@ -1,6 +1,7 @@
 use std::io;
 use std::io::Write;
 
+use bumpalo::Bump;
 use grenad::{CompressionType, WriterBuilder};
 use serde::de::Deserializer;
 use serde_json::{Number, Value};
@@ -8,6 +9,8 @@ use serde_json::{Number, Value};
 use crate::documents::document_visitor::DocumentVisitor;
 use crate::documents::Error;
 use crate::Object;
+
+use super::bumpalo_json::Map;
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///
@@ -79,6 +82,16 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         Ok(())
     }
 
+    /// Appends a new bump JSON object into the batch
+    pub fn append_bump_json_object<'bump>(&mut self, object: &Map<'bump>) -> Result<(), Error> {
+        self.value_buffer.clear();
+        let internal_id = self.documents_count.to_be_bytes();
+        serde_json::to_writer(&mut self.value_buffer, object)?;
+        self.writer.insert(internal_id, &self.value_buffer)?;
+        self.documents_count += 1;
+        Ok(())
+    }
+
     /// Appends a new JSON object into the batch
     pub fn append_json_object(&mut self, object: &Object) -> Result<(), Error> {
         self.value_buffer.clear();
@@ -91,9 +104,22 @@ impl<W: Write> DocumentsBatchBuilder<W> {
 
     /// Appends new json documents from a reader. The reader may contain a Json object
     /// or an array of Json objects.
+    pub fn append_bump_json<R: io::Read>(&mut self, reader: R) -> Result<(), Error> {
+        let mut de = serde_json::Deserializer::from_reader(reader);
+        let mut bump = Bump::new();
+        let mut visitor = DocumentVisitor { batch_builder: self, bump: &mut bump };
+
+        // The result of `deserialize_any` is StdResult<Result<(), Error>, serde_json::Error>
+        // See the documentqtion of DocumentVisitor for an explanation
+        de.deserialize_any(&mut visitor).map_err(Error::Json)?
+    }
+
+    /// Appends new json documents from a reader. The reader may contain a Json object
+    /// or an array of Json objects.
     pub fn append_json<R: io::Read>(&mut self, reader: R) -> Result<(), Error> {
         let mut de = serde_json::Deserializer::from_reader(reader);
-        let mut visitor = DocumentVisitor { batch_builder: self };
+        let mut bump = Bump::new();
+        let mut visitor = DocumentVisitor { batch_builder: self, bump: &mut bump };
 
         // The result of `deserialize_any` is StdResult<Result<(), Error>, serde_json::Error>
         // See the documentqtion of DocumentVisitor for an explanation

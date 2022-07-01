@@ -15,15 +15,18 @@ as we read each Json object from the array, we immediately write it to the new f
 use std::fmt;
 use std::io::Write;
 
+use bumpalo::Bump;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 use crate::documents::{DocumentsBatchBuilder, Error};
-use crate::Object;
+
+use super::bumpalo_json::{self, JsonValueBumpSeed, MaybeMut, StringBumpSeed};
 
 /// A Visitor that passes each visited Json object to a `DocumentsBatchBuilder`
 /// so that it is written to a file.
 pub struct DocumentVisitor<'a, W> {
     pub batch_builder: &'a mut DocumentsBatchBuilder<W>,
+    pub bump: &'a mut Bump,
 }
 
 impl<'a, 'de, W: Write> Visitor<'de> for &mut DocumentVisitor<'a, W> {
@@ -47,6 +50,7 @@ impl<'a, 'de, W: Write> Visitor<'de> for &mut DocumentVisitor<'a, W> {
             if let Err(e) = v {
                 return Ok(Err(e.into()));
             }
+            self.bump.reset();
         }
 
         Ok(Ok(()))
@@ -57,15 +61,18 @@ impl<'a, 'de, W: Write> Visitor<'de> for &mut DocumentVisitor<'a, W> {
     where
         A: MapAccess<'de>,
     {
-        let mut object = Object::new();
+        let mut object = bumpalo::collections::vec::Vec::new_in(&self.bump);
+        let key_seed = StringBumpSeed { bump: &self.bump };
+        let value_seed = JsonValueBumpSeed { bump: &self.bump };
         // Note that here we call serde_json's normal `next_entry` method, which
         // does not use our visitor. So we deserialize each field of the object normally.
         // And we add each field to our object.
-        while let Some((key, value)) = map.next_entry()? {
-            object.insert(key, value);
+        while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
+            object.push((key, MaybeMut::Ref(self.bump.alloc(value))));
         }
+        let object = self.bump.alloc(bumpalo_json::Map(object));
         // Now that we visited each field, we can pass our object to the batch builder.
-        if let Err(e) = self.batch_builder.append_json_object(&object) {
+        if let Err(e) = self.batch_builder.append_bump_json_object(object) {
             // and again return early if an error was encountered
             return Ok(Err(e.into()));
         }
@@ -103,10 +110,11 @@ mod tests {
     use super::*;
 
     fn deser(input: &str) -> Result<String, serde_json::Error> {
+        let mut bump = Bump::new();
         let mut writer = Vec::new();
         let mut de = serde_json::Deserializer::from_reader(Cursor::new(input));
         let mut batch_builder = DocumentsBatchBuilder::new(&mut writer);
-        let mut visitor = DocumentVisitor { batch_builder: &mut batch_builder };
+        let mut visitor = DocumentVisitor { batch_builder: &mut batch_builder, bump: &mut bump };
 
         // The result of `deserialize_any` is StdResult<Result<(), Error>, serde_json::Error>
         // See the documentqtion of DocumentVisitor for an explanation
