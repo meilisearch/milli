@@ -62,6 +62,17 @@ impl<'de, 'bump> DeserializeSeed<'de> for StringBumpSeed<'bump> {
 #[derive(Debug)]
 pub struct Map<'bump>(pub BumpVec<'bump, (&'bump str, MaybeMut<'bump, Value<'bump>>)>);
 
+impl<'bump> Map<'bump> {
+    pub fn get(&'bump self, k: &str) -> Option<&'bump Value<'bump>> {
+        if let Some(x) = self.0.iter().find(|(k2, _)| k == *k2) {
+            let x: &'bump Value<'bump> = x.1.as_ref();
+            Some(x)
+        } else {
+            None
+        }
+    }
+}
+
 // pub type Map<'bump> = BumpVec<'bump, (&'bump str, MaybeMut<'bump, Value<'bump>>)>;
 pub type Seq<'bump> = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
 

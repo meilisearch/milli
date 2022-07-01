@@ -4,9 +4,10 @@ use std::result::Result as StdResult;
 use std::{fmt, iter};
 
 use bumpalo::Bump;
+use bumpalo_json::Value;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
+use crate::documents::bumpalo_json::{self, Map};
 use crate::documents::DocumentsBatchReader;
 use crate::error::{GeoError, InternalError, UserError};
 use crate::update::index_documents::enriched::EnrichedDocumentsBatchReader;
@@ -67,9 +68,18 @@ pub fn enrich_documents_batch<R: Read + Seek>(
     // If the settings specifies that a _geo field must be used therefore we must check the
     // validity of it in all the documents of this batch
     let look_for_geo_field = index.sortable_fields(rtxn)?.contains("_geo");
-
     let mut count = 0;
-    while let Some(document) = cursor.next_document()? {
+
+    let mut bump = Bump::new();
+    loop {
+        bump.reset();
+        let document = if let Some(document) = cursor.next_bump_document(&bump)? {
+            document
+        } else {
+            break;
+        };
+        let document: &_ = bump.alloc(document);
+
         let document_id = match fetch_or_generate_document_id(
             &document,
             &primary_key,
@@ -106,8 +116,8 @@ pub fn enrich_documents_batch<R: Read + Seek>(
 
 /// Retrieve the document id after validating it, returning a `UserError`
 /// if the id is invalid or can't be guessed.
-fn fetch_or_generate_document_id(
-    document: &Object,
+fn fetch_or_generate_document_id<'bump>(
+    document: &'bump Map<'bump>,
     primary_key: &PrimaryKey,
     autogenerate_docids: bool,
     uuid_buffer: &mut [u8; uuid::adapter::Hyphenated::LENGTH],
@@ -125,7 +135,7 @@ fn fetch_or_generate_document_id(
             }
             None => Ok(Err(UserError::MissingDocumentId {
                 primary_key: primary_key.to_string(),
-                document: document.clone(),
+                document: todo!(),
             })),
         },
         nested @ PrimaryKey::Nested { .. } => {
@@ -137,7 +147,7 @@ fn fetch_or_generate_document_id(
                 if matching_documents_ids.len() >= 2 {
                     return Ok(Err(UserError::TooManyDocumentIds {
                         primary_key: nested.name().to_string(),
-                        document: document.clone(),
+                        document: todo!(),
                     }));
                 }
             }
@@ -149,7 +159,7 @@ fn fetch_or_generate_document_id(
                 },
                 None => Ok(Err(UserError::MissingDocumentId {
                     primary_key: nested.name().to_string(),
-                    document: document.clone(),
+                    document: todo!(),
                 })),
             }
         }
@@ -246,20 +256,24 @@ fn contained_in(selector: &str, key: &str) -> bool {
             .unwrap_or(true)
 }
 
-pub fn fetch_matching_values<'a>(value: &'a Value, selector: &str, output: &mut Vec<&'a Value>) {
+pub fn fetch_matching_values<'bump>(
+    value: &'bump Value<'bump>,
+    selector: &str,
+    output: &mut Vec<&'bump Value<'bump>>,
+) {
     match value {
-        Value::Object(object) => fetch_matching_values_in_object(object, selector, "", output),
+        Value::Map(object) => fetch_matching_values_in_object(object, selector, "", output),
         otherwise => output.push(otherwise),
     }
 }
 
-pub fn fetch_matching_values_in_object<'a>(
-    object: &'a Object,
+pub fn fetch_matching_values_in_object<'bump>(
+    object: &'bump Map<'bump>,
     selector: &str,
     base_key: &str,
-    output: &mut Vec<&'a Value>,
+    output: &mut Vec<&'bump Value<'bump>>,
 ) {
-    for (key, value) in object {
+    for (key, value) in object.0.iter() {
         let base_key = if base_key.is_empty() {
             key.to_string()
         } else {
@@ -272,8 +286,8 @@ pub fn fetch_matching_values_in_object<'a>(
             contained_in(selector, &base_key) || contained_in(&base_key, selector);
 
         if should_continue {
-            match value {
-                Value::Object(object) => {
+            match value.as_ref() {
+                Value::Map(object) => {
                     fetch_matching_values_in_object(object, selector, &base_key, output)
                 }
                 value => output.push(value),
@@ -295,52 +309,61 @@ pub fn validate_document_id(document_id: &str) -> Option<&str> {
 }
 
 /// Parses a Json encoded document id and validate it, returning a user error when it is one.
-pub fn validate_document_id_value(document_id: &Value) -> Result<StdResult<String, UserError>> {
+pub fn validate_document_id_value<'bump>(
+    document_id: &'bump bumpalo_json::Value<'bump>,
+) -> Result<StdResult<String, UserError>> {
     match document_id {
-        Value::String(string) => match validate_document_id(&string) {
-            Some(s) if s.len() == string.len() => Ok(Ok(string.clone())),
+        bumpalo_json::Value::String(string) => match validate_document_id(&string) {
+            Some(s) if s.len() == string.len() => Ok(Ok(string.to_string())),
             Some(s) => Ok(Ok(s.to_string())),
-            None => {
-                Ok(Err(UserError::InvalidDocumentId { document_id: Value::String(string.clone()) }))
-            }
+            None => Ok(Err(UserError::InvalidDocumentId { document_id: todo!() })),
         },
-        Value::Number(number) if number.is_i64() => Ok(Ok(number.to_string())),
-        content => Ok(Err(UserError::InvalidDocumentId { document_id: content.clone() })),
+        bumpalo_json::Value::UnsignedInteger(number) => Ok(Ok(number.to_string())),
+        bumpalo_json::Value::SignedInteger(number) => Ok(Ok(number.to_string())),
+        content => Ok(Err(UserError::InvalidDocumentId { document_id: todo!() })),
     }
 }
 
 /// Try to extract an `f64` from a JSON `Value` and return the `Value`
 /// in the `Err` variant if it failed.
-pub fn extract_float_from_value(value: &Value) -> StdResult<f64, Value> {
+pub fn extract_float_from_value(value: &Value) -> StdResult<f64, ()> {
     match value {
-        Value::Number(ref n) => n.as_f64().ok_or_else(|| value.clone()),
-        Value::String(ref s) => s.parse::<f64>().map_err(|_| value.clone()),
-        value => Err(value.clone()),
+        Value::UnsignedInteger(ref n) => Ok(*n as f64),
+        Value::SignedInteger(ref n) => Ok(*n as f64),
+        Value::Float(ref n) => Ok(*n),
+        Value::String(ref s) => s.parse::<f64>().map_err(|_| todo!()),
+        value => Err(todo!()),
     }
 }
 
-pub fn validate_geo_from_json(
+pub fn validate_geo_from_json<'bump>(
     id: &DocumentId,
-    geo_value: &Value,
+    geo_value: &'bump Value<'bump>,
 ) -> Result<StdResult<(), GeoError>> {
     use GeoError::*;
-    let debug_id = || Value::from(id.debug());
+    let debug_id = || todo!();
     match geo_value {
-        Value::Object(object) => match (object.get("lat"), object.get("lng")) {
+        Value::Map(object) => match (object.get("lat"), object.get("lng")) {
             (Some(lat), Some(lng)) => {
                 match (extract_float_from_value(lat), extract_float_from_value(lng)) {
                     (Ok(_), Ok(_)) => Ok(Ok(())),
-                    (Err(value), Ok(_)) => Ok(Err(BadLatitude { document_id: debug_id(), value })),
-                    (Ok(_), Err(value)) => Ok(Err(BadLongitude { document_id: debug_id(), value })),
-                    (Err(lat), Err(lng)) => {
-                        Ok(Err(BadLatitudeAndLongitude { document_id: debug_id(), lat, lng }))
+                    (Err(value), Ok(_)) => {
+                        Ok(Err(BadLatitude { document_id: debug_id(), value: todo!() }))
                     }
+                    (Ok(_), Err(value)) => {
+                        Ok(Err(BadLongitude { document_id: debug_id(), value: todo!() }))
+                    }
+                    (Err(lat), Err(lng)) => Ok(Err(BadLatitudeAndLongitude {
+                        document_id: debug_id(),
+                        lat: todo!(),
+                        lng: todo!(),
+                    })),
                 }
             }
             (None, Some(_)) => Ok(Err(MissingLatitude { document_id: debug_id() })),
             (Some(_), None) => Ok(Err(MissingLongitude { document_id: debug_id() })),
             (None, None) => Ok(Err(MissingLatitudeAndLongitude { document_id: debug_id() })),
         },
-        value => Ok(Err(NotAnObject { document_id: debug_id(), value: value.clone() })),
+        value => Ok(Err(NotAnObject { document_id: debug_id(), value: todo!() })),
     }
 }

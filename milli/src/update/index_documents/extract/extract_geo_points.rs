@@ -1,10 +1,12 @@
 use std::fs::File;
 use std::io;
 
+use bumpalo::Bump;
 use concat_arrays::concat_arrays;
 use serde_json::Value;
 
 use super::helpers::{create_writer, writer_into_reader, GrenadParameters};
+use crate::documents::bumpalo_json;
 use crate::error::GeoError;
 use crate::update::index_documents::extract_float_from_value;
 use crate::{FieldId, InternalError, Result};
@@ -25,7 +27,9 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
     );
 
     let mut cursor = obkv_documents.into_cursor()?;
+    let mut bump = Bump::new();
     while let Some((docid_bytes, value)) = cursor.move_on_next()? {
+        bump.reset();
         let obkv = obkv::KvReader::new(value);
         // since we only needs the primary key when we throw an error we create this getter to
         // lazily get it when needed
@@ -40,15 +44,18 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
 
         if let Some((lat, lng)) = lat.zip(lng) {
             // then we extract the values
-            let lat = extract_float_from_value(
-                &serde_json::from_slice(lat).map_err(InternalError::SerdeJson)?,
-            )
-            .map_err(|lat| GeoError::BadLatitude { document_id: document_id(), value: lat })?;
+            let lat_value = bumpalo_json::deserialize_json_slice(lat, &bump)
+                .map_err(InternalError::SerdeJson)?;
+            let lng_value = bumpalo_json::deserialize_json_slice(lng, &bump)
+                .map_err(InternalError::SerdeJson)?;
 
-            let lng = extract_float_from_value(
-                &serde_json::from_slice(lng).map_err(InternalError::SerdeJson)?,
-            )
-            .map_err(|lng| GeoError::BadLongitude { document_id: document_id(), value: lng })?;
+            let lat = extract_float_from_value(&lat_value).map_err(|lat| {
+                GeoError::BadLatitude { document_id: document_id(), value: todo!() }
+            })?;
+
+            let lng = extract_float_from_value(&lng_value).map_err(|lng| {
+                GeoError::BadLongitude { document_id: document_id(), value: todo!() }
+            })?;
 
             let bytes: [u8; 16] = concat_arrays![lat.to_ne_bytes(), lng.to_ne_bytes()];
             writer.insert(docid_bytes, bytes)?;
