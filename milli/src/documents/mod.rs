@@ -1,5 +1,6 @@
 mod builder;
 pub mod document_formats;
+mod bumpalo_json;
 mod document_visitor;
 mod reader;
 

@@ -240,6 +240,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             let external_id_string = external_id.value();
             // Step 1.
             if external_id.is_generated() {
+                // TODO: do this only at the last step, when writing into the obkv
                 original_document
                     .insert(primary_key.clone(), Value::String(external_id_string.to_owned()));
             }
@@ -334,6 +335,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                     self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
                 }
             }
+            // TODO: remove when the flattened document is guaranteed to contain all the keys of the original document
             for key in original_document.keys() {
                 self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
             }
