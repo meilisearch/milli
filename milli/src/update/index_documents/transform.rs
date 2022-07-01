@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 
+use bumpalo::Bump;
 use byteorder::ReadBytesExt;
 use fxhash::FxHashMap;
 use grenad::ChunkCreator;
@@ -12,9 +13,12 @@ use obkv::{KvReader, KvWriter};
 use roaring::RoaringBitmap;
 use serde_json::Value;
 use smartstring::SmartString;
+use time::serde::rfc2822::deserialize;
 
+use super::enriched::EnrichedBumpDocument;
 use super::helpers::{create_sorter, create_writer, keep_latest_obkv, merge_obkvs, MergeFn};
 use super::{IndexDocumentsMethod, IndexerConfig};
+use crate::documents::bumpalo_json::{self, serialize_json, serialize_map};
 use crate::error::{Error, InternalError, UserError};
 use crate::index::db_name;
 use crate::update::index_documents::enriched::{EnrichedDocument, EnrichedDocumentsBatchReader};
@@ -90,8 +94,8 @@ impl WriteDocumentsToSorterBuffers {
 
 /// Inserts the given document as obkv into the sorter. The key associated with the document
 /// in the sorter is the given docid.
-fn write_document_to_sorters_as_obkv<const N: usize, MF, CC>(
-    document: Object,
+fn write_document_to_sorters_as_obkv<'bump, const N: usize, MF, CC>(
+    document: &bumpalo_json::Map<'bump>,
     docid: u32,
     fields_ids_map: &FieldsIdsMap,
     sorters: [&mut grenad::Sorter<MF, CC>; N],
@@ -108,13 +112,13 @@ where
     // 2. Sort the result so that the keys (FieldIds) are in order, which is required for insertion into the obkv
     // 3. Make an obkv from the sorted result
     // 4. Insert the obkv into the sorter under the key `docid`
-    buffers.clear(document.len());
+    buffers.clear(document.0.len());
 
-    for (index, (key, value)) in document.iter().enumerate() {
+    for (index, (key, value)) in document.0.iter().enumerate() {
         let value_buffer = buffers.get_value_bytes_buffer(index);
-        serde_json::to_writer(value_buffer, value).unwrap();
+        serialize_json(value.as_ref(), value_buffer);
 
-        let field_id = fields_ids_map.id(key.as_str()).unwrap();
+        let field_id = fields_ids_map.id(key).unwrap();
         buffers.sorted_documents.push((index, field_id));
     }
 
@@ -226,9 +230,17 @@ impl<'a, 'i> Transform<'a, 'i> {
         let mut documents_count = 0;
 
         let mut write_docs_buffers = WriteDocumentsToSorterBuffers::default();
+        let mut bump = Bump::new();
+        loop {
+            bump.reset();
+            let enriched_document =
+                if let Some(enriched_document) = cursor.next_enriched_bump_document(&bump)? {
+                    enriched_document
+                } else {
+                    break;
+                };
 
-        while let Some(enriched_document) = cursor.next_enriched_document()? {
-            let EnrichedDocument { document: mut original_document, document_id: external_id } =
+            let EnrichedBumpDocument { document: original_document, document_id: external_id } =
                 enriched_document;
 
             if self.indexer_settings.log_every_n.map_or(false, |len| documents_count % len == 0) {
@@ -241,8 +253,12 @@ impl<'a, 'i> Transform<'a, 'i> {
             // Step 1.
             if external_id.is_generated() {
                 // TODO: do this only at the last step, when writing into the obkv
-                original_document
-                    .insert(primary_key.clone(), Value::String(external_id_string.to_owned()));
+                original_document.0.push((
+                    bump.alloc_str(primary_key.as_str()),
+                    bumpalo_json::MaybeMut::Ref(
+                        bump.alloc(bumpalo_json::Value::String(bump.alloc(external_id_string))),
+                    ),
+                ));
             }
 
             // Step 2, part 1.
@@ -298,76 +314,71 @@ impl<'a, 'i> Transform<'a, 'i> {
                 // 2. flattening the json
                 // 3. writing it into the flattened sorter
                 let reader = KvReader::new(base_obkv);
-                let mut document = Object::new();
+                let mut document = bumpalo::collections::vec::Vec::new_in(&bump);
                 for (field_id, value) in reader.iter() {
-                    let key = self.fields_ids_map.name(field_id).unwrap(); // TODO: error handling
-                    let value: Value = serde_json::from_slice(value).unwrap(); // TODO: error handling
-                    document.insert(key.to_string(), value);
+                    let key: &str = bump.alloc_str(self.fields_ids_map.name(field_id).unwrap()); // TODO: error handling
+                    let value = bumpalo_json::deserialize_json_slice(value, &bump).unwrap(); // TODO: error handling
+                    document.push((key, bumpalo_json::MaybeMut::Mut(bump.alloc(value))));
                 }
-
-                let flattened_document = flatten_serde_json::flatten(&document);
-                match flattened_document {
-                    Cow::Owned(flattened_document) => {
-                        write_document_to_sorters_as_obkv(
-                            flattened_document,
-                            internal_id,
-                            &self.fields_ids_map,
-                            [&mut self.flattened_sorter],
-                            &mut write_docs_buffers,
-                        )?;
-                    }
-                    Cow::Borrowed(_) => {
-                        self.flattened_sorter.insert(&internal_id.to_be_bytes(), base_obkv)?;
-                    }
-                }
+                let document: &_ = bump.alloc(bumpalo_json::Map(document));
+                let flattened_document = bumpalo_json::flatten(document, &bump);
+                // match flattened_document {
+                //     Cow::Owned(flattened_document) => {
+                write_document_to_sorters_as_obkv(
+                    flattened_document,
+                    internal_id,
+                    &self.fields_ids_map,
+                    [&mut self.flattened_sorter],
+                    &mut write_docs_buffers,
+                )?;
+                // }
+                // Cow::Borrowed(_) => {
+                //     self.flattened_sorter.insert(&internal_id.to_be_bytes(), base_obkv)?;
+                // }
+                // }
             } else {
                 self.new_documents_ids.insert(internal_id);
             }
 
-            // Note: the flattened document is Cow::Borrowed(original_document) if there was no need
-            // to flatten it. In that case, we avoid doing some operations twice on the original
-            // and flattened documents, since they are identical.
-            let flattened_document = flatten_serde_json::flatten(&original_document);
+            let flattened_document = bumpalo_json::flatten(&original_document, &bump);
 
             // Step 3.
-            if matches!(flattened_document, Cow::Owned(_)) {
-                for key in flattened_document.keys() {
-                    self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
-                }
+            for (key, _) in flattened_document.0.iter() {
+                self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
             }
             // TODO: remove when the flattened document is guaranteed to contain all the keys of the original document
-            for key in original_document.keys() {
+            for (key, _) in original_document.0.iter() {
                 self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
             }
 
-            // Step 4.
-            match flattened_document {
-                Cow::Borrowed(_) => {
-                    write_document_to_sorters_as_obkv(
-                        original_document,
-                        internal_id,
-                        &self.fields_ids_map,
-                        [&mut self.original_sorter, &mut self.flattened_sorter],
-                        &mut write_docs_buffers,
-                    )?;
-                }
-                Cow::Owned(flattened_document) => {
-                    write_document_to_sorters_as_obkv(
-                        flattened_document,
-                        internal_id,
-                        &self.fields_ids_map,
-                        [&mut self.flattened_sorter],
-                        &mut write_docs_buffers,
-                    )?;
-                    write_document_to_sorters_as_obkv(
-                        original_document,
-                        internal_id,
-                        &self.fields_ids_map,
-                        [&mut self.original_sorter],
-                        &mut write_docs_buffers,
-                    )?;
-                }
-            }
+            // // Step 4.
+            // match flattened_document {
+            //     Cow::Borrowed(_) => {
+            //         write_document_to_sorters_as_obkv(
+            //             original_document,
+            //             internal_id,
+            //             &self.fields_ids_map,
+            //             [&mut self.original_sorter, &mut self.flattened_sorter],
+            //             &mut write_docs_buffers,
+            //         )?;
+            //     }
+            //     Cow::Owned(flattened_document) => {
+            write_document_to_sorters_as_obkv(
+                flattened_document,
+                internal_id,
+                &self.fields_ids_map,
+                [&mut self.flattened_sorter],
+                &mut write_docs_buffers,
+            )?;
+            write_document_to_sorters_as_obkv(
+                &original_document,
+                internal_id,
+                &self.fields_ids_map,
+                [&mut self.original_sorter],
+                &mut write_docs_buffers,
+            )?;
+            //     }
+            // }
 
             documents_count += 1;
 

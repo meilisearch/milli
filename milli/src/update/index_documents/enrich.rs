@@ -3,6 +3,7 @@ use std::io::{Read, Seek};
 use std::result::Result as StdResult;
 use std::{fmt, iter};
 
+use bumpalo::Bump;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

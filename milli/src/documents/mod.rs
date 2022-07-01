@@ -1,4 +1,5 @@
 mod builder;
+pub mod bumpalo_json;
 pub mod document_formats;
 mod bumpalo_json;
 mod document_visitor;

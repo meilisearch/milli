@@ -1,7 +1,11 @@
 use std::fs::File;
 use std::{fmt, io, str};
 
-use crate::documents::{DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader};
+use bumpalo::Bump;
+
+use crate::documents::{
+    bumpalo_json, DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader,
+};
 use crate::update::DocumentId;
 use crate::Object;
 
@@ -89,4 +93,29 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchCursor<R> {
             None => Ok(None),
         }
     }
+    /// Returns the next document, starting from the first one. Subsequent calls to
+    /// `next_document` advance the document reader until all the documents have been read.
+    pub fn next_enriched_bump_document<'bump>(
+        &mut self,
+        bump: &'bump Bump,
+    ) -> Result<Option<EnrichedBumpDocument<'bump>>, DocumentsBatchCursorError> {
+        let document = self.documents.next_bump_document(bump)?;
+        let document_id = match self.external_ids.move_on_next()? {
+            Some((_, bytes)) => serde_json::from_slice(bytes).map(Some)?,
+            None => None,
+        };
+
+        match document.zip(document_id) {
+            Some((document, document_id)) => {
+                let document = bump.alloc(document);
+                Ok(Some(EnrichedBumpDocument { document, document_id }))
+            }
+            None => Ok(None),
+        }
+    }
+}
+#[derive(Debug)]
+pub struct EnrichedBumpDocument<'bump> {
+    pub document: &'bump mut bumpalo_json::Map<'bump>,
+    pub document_id: DocumentId,
 }

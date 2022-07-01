@@ -1,6 +1,9 @@
 use std::convert::TryInto;
 use std::{error, fmt, io};
 
+use bumpalo::Bump;
+
+use super::bumpalo_json::{self, Map};
 use super::Error;
 use crate::Object;
 
@@ -67,6 +70,22 @@ impl<R: io::Read + io::Seek> DocumentsBatchCursor<R> {
             Some((_, value)) => {
                 let json = serde_json::from_slice(value)?;
                 Ok(Some(json))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn next_bump_document<'bump>(
+        &mut self,
+        bump: &'bump Bump,
+    ) -> Result<Option<Map<'bump>>, DocumentsBatchCursorError> {
+        match self.cursor.move_on_next()? {
+            Some((_, value)) => {
+                let json = bumpalo_json::deserialize_json_slice(value, bump)?;
+                match json {
+                    bumpalo_json::Value::Map(map) => Ok(Some(map)),
+                    _ => panic!(),
+                }
             }
             None => Ok(None),
         }
