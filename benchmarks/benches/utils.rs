@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
 use std::fs::{create_dir_all, remove_dir_all, File};
-use std::io::{self, BufRead, BufReader, Cursor, Read, Seek};
-use std::num::ParseFloatError;
+use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::Path;
 
 use criterion::BenchmarkId;
@@ -11,8 +10,7 @@ use milli::documents::{DocumentsBatchBuilder, DocumentsBatchReader};
 use milli::update::{
     IndexDocuments, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig, Settings,
 };
-use milli::{Filter, Index, Object};
-use serde_json::Value;
+use milli::{Filter, Index};
 
 pub struct Conf<'a> {
     /// where we are going to create our database.mmdb directory
@@ -178,78 +176,4 @@ fn documents_from_csv(reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
     documents.append_csv(csv)?;
 
     documents.into_inner().map_err(Into::into)
-}
-
-enum AllowedType {
-    String,
-    Number,
-}
-
-fn parse_csv_header(header: &str) -> (String, AllowedType) {
-    // if there are several separators we only split on the last one.
-    match header.rsplit_once(':') {
-        Some((field_name, field_type)) => match field_type {
-            "string" => (field_name.to_string(), AllowedType::String),
-            "number" => (field_name.to_string(), AllowedType::Number),
-            // we may return an error in this case.
-            _otherwise => (header.to_string(), AllowedType::String),
-        },
-        None => (header.to_string(), AllowedType::String),
-    }
-}
-
-struct CSVDocumentDeserializer<R>
-where
-    R: Read,
-{
-    documents: csv::StringRecordsIntoIter<R>,
-    headers: Vec<(String, AllowedType)>,
-}
-
-impl<R: Read> CSVDocumentDeserializer<R> {
-    fn from_reader(reader: R) -> io::Result<Self> {
-        let mut records = csv::Reader::from_reader(reader);
-
-        let headers = records.headers()?.into_iter().map(parse_csv_header).collect();
-
-        Ok(Self { documents: records.into_records(), headers })
-    }
-}
-
-impl<R: Read> Iterator for CSVDocumentDeserializer<R> {
-    type Item = anyhow::Result<Object>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let csv_document = self.documents.next()?;
-
-        match csv_document {
-            Ok(csv_document) => {
-                let mut document = Object::new();
-
-                for ((field_name, field_type), value) in
-                    self.headers.iter().zip(csv_document.into_iter())
-                {
-                    let parsed_value: Result<Value, ParseFloatError> = match field_type {
-                        AllowedType::Number => {
-                            value.parse::<f64>().map(Value::from).map_err(Into::into)
-                        }
-                        AllowedType::String => Ok(Value::String(value.to_string())),
-                    };
-
-                    match parsed_value {
-                        Ok(value) => drop(document.insert(field_name.to_string(), value)),
-                        Err(_e) => {
-                            return Some(Err(anyhow::anyhow!(
-                                "Value '{}' is not a valid number",
-                                value
-                            )))
-                        }
-                    }
-                }
-
-                Some(Ok(document))
-            }
-            Err(e) => Some(Err(anyhow::anyhow!("Error parsing csv document: {}", e))),
-        }
-    }
 }
