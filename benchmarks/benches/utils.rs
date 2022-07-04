@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::fs::{create_dir_all, remove_dir_all, File};
-use std::io::{self, BufReader, Cursor, Read, Seek};
+use std::io::{self, BufRead, BufReader, Cursor, Read, Seek};
 use std::num::ParseFloatError;
 use std::path::Path;
 
@@ -141,6 +141,7 @@ pub fn run_benches(c: &mut criterion::Criterion, confs: &[Conf]) {
 pub fn documents_from(filename: &str, filetype: &str) -> DocumentsBatchReader<impl Read + Seek> {
     let reader =
         File::open(filename).expect(&format!("could not find the dataset in: {}", filename));
+    let reader = BufReader::new(reader);
     let documents = match filetype {
         "csv" => documents_from_csv(reader).unwrap(),
         "json" => documents_from_json(reader).unwrap(),
@@ -150,30 +151,27 @@ pub fn documents_from(filename: &str, filetype: &str) -> DocumentsBatchReader<im
     DocumentsBatchReader::from_reader(Cursor::new(documents)).unwrap()
 }
 
-fn documents_from_jsonl(reader: impl Read) -> anyhow::Result<Vec<u8>> {
+fn documents_from_jsonl(mut reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
     let mut documents = DocumentsBatchBuilder::new(Vec::new());
-    let reader = BufReader::new(reader);
-
-    for result in serde_json::Deserializer::from_reader(reader).into_iter::<Object>() {
-        let object = result?;
-        documents.append_json_object(&object)?;
+    let mut buf = String::new();
+    while reader.read_line(&mut buf)? > 0 {
+        if buf == "\n" {
+            buf.clear();
+            continue;
+        }
+        documents.append_unparsed_json_object(buf.as_str())?;
+        buf.clear();
     }
-
     documents.into_inner().map_err(Into::into)
 }
 
-fn documents_from_json(reader: impl Read) -> anyhow::Result<Vec<u8>> {
+fn documents_from_json(reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
     let mut documents = DocumentsBatchBuilder::new(Vec::new());
-    let list: Vec<Object> = serde_json::from_reader(reader)?;
-
-    for object in list {
-        documents.append_json_object(&object)?;
-    }
-
+    documents.append_json(reader)?;
     documents.into_inner().map_err(Into::into)
 }
 
-fn documents_from_csv(reader: impl Read) -> anyhow::Result<Vec<u8>> {
+fn documents_from_csv(reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
     let csv = csv::Reader::from_reader(reader);
 
     let mut documents = DocumentsBatchBuilder::new(Vec::new());
