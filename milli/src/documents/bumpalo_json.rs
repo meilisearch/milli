@@ -1,5 +1,3 @@
-use std::{alloc::GlobalAlloc, fmt::Write, io::BufWriter};
-
 use bumpalo::collections::vec::Vec as BumpVec;
 use bumpalo::Bump;
 use serde::{
@@ -7,21 +5,9 @@ use serde::{
     ser::{SerializeMap, SerializeSeq},
     Deserializer, Serialize,
 };
+use serde_json::Number;
 
-// pub struct BumpMap<'bump> {
-//     inner: BumpVec<'bump, &'bump mut (&'bump str, Value<'bump>)>,
-// }
-// impl<'bump> BumpMap<'bump> {
-//     pub fn is_empty(&self) -> bool {
-//         self.inner.is_empty()
-//     }
-//     pub fn len(&self) -> usize {
-//         self.inner.len()
-//     }
-//     pub fn iter(&self) -> impl Iterator<Item = &(&'bump str, Value<'bump>)> {
-//         self.inner.iter().map(|x| &**x)
-//     }
-// }
+use crate::Object;
 
 #[derive(Clone, Copy)]
 pub struct StringBumpSeed<'bump> {
@@ -407,14 +393,6 @@ fn insert_object<'bump>(
             }
             value => insert_value(base_json, &new_key, value, bump),
         }
-
-        // if let Some(array) = value.as_array() {
-        //     insert_array(base_json, &new_key, array);
-        // } else if let Some(object) = value.as_object() {
-        //     insert_object(base_json, Some(&new_key), object);
-        // } else {
-        //     insert_value(base_json, &new_key, value.clone());
-        // }
     }
 }
 
@@ -495,6 +473,38 @@ fn insert_value<'bump>(
         // if it does not exist we can push the value untouched
         let new = (key, MaybeMut::Ref(to_insert));
         base_json.0.push(new);
+    }
+}
+
+impl<'bump> From<&'bump Value<'bump>> for serde_json::Value {
+    fn from(v: &'bump Value<'bump>) -> Self {
+        match v {
+            Value::Null => serde_json::Value::Null,
+            Value::Bool(x) => serde_json::Value::Bool(*x),
+            Value::SignedInteger(x) => serde_json::Value::Number(Number::from(*x)),
+            Value::UnsignedInteger(x) => serde_json::Value::Number(Number::from(*x)),
+            Value::Float(x) => Number::from_f64(*x)
+                .map(serde_json::Value::Number)
+                .unwrap_or_else(|| serde_json::Value::String(x.to_string())),
+            Value::String(x) => serde_json::Value::String(x.to_string()),
+            Value::Sequence(xs) => {
+                let mut vec = Vec::new();
+                for x in xs {
+                    vec.push(x.as_ref().into());
+                }
+                serde_json::Value::Array(vec)
+            }
+            Value::Map(x) => serde_json::Value::Object(x.into()),
+        }
+    }
+}
+impl<'bump> From<&'bump Map<'bump>> for Object {
+    fn from(map: &'bump Map<'bump>) -> Self {
+        let mut object = Object::new();
+        for (key, value) in map.0.iter() {
+            object.insert(key.to_string(), value.as_ref().into());
+        }
+        object
     }
 }
 

@@ -12,7 +12,7 @@ use crate::documents::DocumentsBatchReader;
 use crate::error::{GeoError, InternalError, UserError};
 use crate::update::index_documents::enriched::EnrichedDocumentsBatchReader;
 use crate::update::index_documents::writer_into_reader;
-use crate::{Index, Object, Result};
+use crate::{Index, Result};
 
 /// The symbol used to define levels in a nested primary key.
 const PRIMARY_KEY_SPLIT_SYMBOL: char = '.';
@@ -135,7 +135,7 @@ fn fetch_or_generate_document_id<'bump>(
             }
             None => Ok(Err(UserError::MissingDocumentId {
                 primary_key: primary_key.to_string(),
-                document: todo!(),
+                document: document.into(),
             })),
         },
         nested @ PrimaryKey::Nested { .. } => {
@@ -147,7 +147,7 @@ fn fetch_or_generate_document_id<'bump>(
                 if matching_documents_ids.len() >= 2 {
                     return Ok(Err(UserError::TooManyDocumentIds {
                         primary_key: nested.name().to_string(),
-                        document: todo!(),
+                        document: document.into(),
                     }));
                 }
             }
@@ -159,7 +159,7 @@ fn fetch_or_generate_document_id<'bump>(
                 },
                 None => Ok(Err(UserError::MissingDocumentId {
                     primary_key: nested.name().to_string(),
-                    document: todo!(),
+                    document: document.into(),
                 })),
             }
         }
@@ -316,23 +316,27 @@ pub fn validate_document_id_value<'bump>(
         bumpalo_json::Value::String(string) => match validate_document_id(&string) {
             Some(s) if s.len() == string.len() => Ok(Ok(string.to_string())),
             Some(s) => Ok(Ok(s.to_string())),
-            None => Ok(Err(UserError::InvalidDocumentId { document_id: todo!() })),
+            None => Ok(Err(UserError::InvalidDocumentId {
+                document_id: serde_json::Value::String(string.to_string()),
+            })),
         },
         bumpalo_json::Value::UnsignedInteger(number) => Ok(Ok(number.to_string())),
         bumpalo_json::Value::SignedInteger(number) => Ok(Ok(number.to_string())),
-        content => Ok(Err(UserError::InvalidDocumentId { document_id: todo!() })),
+        document_id => Ok(Err(UserError::InvalidDocumentId { document_id: document_id.into() })),
     }
 }
 
 /// Try to extract an `f64` from a JSON `Value` and return the `Value`
 /// in the `Err` variant if it failed.
-pub fn extract_float_from_value(value: &Value) -> StdResult<f64, ()> {
+pub fn extract_float_from_value<'bump>(
+    value: &'bump Value<'bump>,
+) -> StdResult<f64, serde_json::Value> {
     match value {
         Value::UnsignedInteger(ref n) => Ok(*n as f64),
         Value::SignedInteger(ref n) => Ok(*n as f64),
         Value::Float(ref n) => Ok(*n),
         Value::String(ref s) => s.parse::<f64>().map_err(|_| todo!()),
-        value => Err(todo!()),
+        value => Err(value.into()),
     }
 }
 
@@ -341,22 +345,22 @@ pub fn validate_geo_from_json<'bump>(
     geo_value: &'bump Value<'bump>,
 ) -> Result<StdResult<(), GeoError>> {
     use GeoError::*;
-    let debug_id = || todo!();
+    let debug_id = || serde_json::Value::from(id.debug());
     match geo_value {
         Value::Map(object) => match (object.get("lat"), object.get("lng")) {
             (Some(lat), Some(lng)) => {
                 match (extract_float_from_value(lat), extract_float_from_value(lng)) {
                     (Ok(_), Ok(_)) => Ok(Ok(())),
                     (Err(value), Ok(_)) => {
-                        Ok(Err(BadLatitude { document_id: debug_id(), value: todo!() }))
+                        Ok(Err(BadLatitude { document_id: debug_id(), value: value.into() }))
                     }
                     (Ok(_), Err(value)) => {
-                        Ok(Err(BadLongitude { document_id: debug_id(), value: todo!() }))
+                        Ok(Err(BadLongitude { document_id: debug_id(), value: value.into() }))
                     }
                     (Err(lat), Err(lng)) => Ok(Err(BadLatitudeAndLongitude {
                         document_id: debug_id(),
-                        lat: todo!(),
-                        lng: todo!(),
+                        lat: lat.into(),
+                        lng: lng.into(),
                     })),
                 }
             }
@@ -364,6 +368,6 @@ pub fn validate_geo_from_json<'bump>(
             (Some(_), None) => Ok(Err(MissingLongitude { document_id: debug_id() })),
             (None, None) => Ok(Err(MissingLatitudeAndLongitude { document_id: debug_id() })),
         },
-        value => Ok(Err(NotAnObject { document_id: debug_id(), value: todo!() })),
+        value => Ok(Err(NotAnObject { document_id: debug_id(), value: value.into() })),
     }
 }

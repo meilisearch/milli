@@ -11,21 +11,19 @@ use grenad::ChunkCreator;
 use heed::RoTxn;
 use obkv::{KvReader, KvWriter};
 use roaring::RoaringBitmap;
-use serde_json::Value;
 use smartstring::SmartString;
-use time::serde::rfc2822::deserialize;
 
 use super::enriched::EnrichedBumpDocument;
 use super::helpers::{create_sorter, create_writer, keep_latest_obkv, merge_obkvs, MergeFn};
 use super::{IndexDocumentsMethod, IndexerConfig};
-use crate::documents::bumpalo_json::{self, serialize_json, serialize_map};
+use crate::documents::bumpalo_json::{self, serialize_json};
 use crate::error::{Error, InternalError, UserError};
 use crate::index::db_name;
-use crate::update::index_documents::enriched::{EnrichedDocument, EnrichedDocumentsBatchReader};
+use crate::update::index_documents::enriched::EnrichedDocumentsBatchReader;
 use crate::update::{AvailableDocumentsIds, UpdateIndexingStep};
 use crate::{
     ExternalDocumentsIds, FieldDistribution, FieldId, FieldIdMapMissingEntry, FieldsIdsMap, Index,
-    Object, Result, BEU32,
+    Result, BEU32,
 };
 
 pub struct TransformOutput {
@@ -116,7 +114,7 @@ where
 
     for (index, (key, value)) in document.0.iter().enumerate() {
         let value_buffer = buffers.get_value_bytes_buffer(index);
-        serialize_json(value.as_ref(), value_buffer);
+        serialize_json(value.as_ref(), value_buffer).unwrap();
 
         let field_id = fields_ids_map.id(key).unwrap();
         buffers.sorted_documents.push((index, field_id));

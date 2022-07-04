@@ -44,17 +44,22 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
 
         if let Some((lat, lng)) = lat.zip(lng) {
             // then we extract the values
-            let lat_value = bumpalo_json::deserialize_json_slice(lat, &bump)
-                .map_err(InternalError::SerdeJson)?;
-            let lng_value = bumpalo_json::deserialize_json_slice(lng, &bump)
-                .map_err(InternalError::SerdeJson)?;
+            let lat_value = bump.alloc(
+                bumpalo_json::deserialize_json_slice(lat, &bump)
+                    .map_err(InternalError::SerdeJson)?,
+            );
+            let lng_value = bump.alloc(
+                bumpalo_json::deserialize_json_slice(lng, &bump)
+                    .map_err(InternalError::SerdeJson)?,
+            );
 
-            let lat = extract_float_from_value(&lat_value).map_err(|lat| {
-                GeoError::BadLatitude { document_id: document_id(), value: todo!() }
+            let lat = extract_float_from_value(lat_value).map_err(|lat| GeoError::BadLatitude {
+                document_id: document_id(),
+                value: lat.into(),
             })?;
 
-            let lng = extract_float_from_value(&lng_value).map_err(|lng| {
-                GeoError::BadLongitude { document_id: document_id(), value: todo!() }
+            let lng = extract_float_from_value(lng_value).map_err(|lng| {
+                GeoError::BadLongitude { document_id: document_id(), value: lng.into() }
             })?;
 
             let bytes: [u8; 16] = concat_arrays![lat.to_ne_bytes(), lng.to_ne_bytes()];
