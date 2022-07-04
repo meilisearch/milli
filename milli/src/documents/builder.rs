@@ -72,6 +72,14 @@ impl<W: Write> DocumentsBatchBuilder<W> {
     }
 
     /// Appends a new JSON object into the batch
+    pub fn append_unparsed_json_object(&mut self, object: &str) -> Result<(), Error> {
+        let internal_id = self.documents_count.to_be_bytes();
+        self.writer.insert(internal_id, object.as_bytes())?;
+        self.documents_count += 1;
+        Ok(())
+    }
+
+    /// Appends a new JSON object into the batch
     pub fn append_json_object(&mut self, object: &Object) -> Result<(), Error> {
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
