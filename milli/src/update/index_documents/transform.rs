@@ -323,11 +323,16 @@ impl<'a, 'i> Transform<'a, 'i> {
                 self.new_documents_ids.insert(internal_id);
             }
 
+            // Note: the flattened document is Cow::Borrowed(original_document) if there was no need
+            // to flatten it. In that case, we avoid doing some operations twice on the original
+            // and flattened documents, since they are identical.
             let flattened_document = flatten_serde_json::flatten(&original_document);
 
             // Step 3.
-            for key in flattened_document.keys() {
-                self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
+            if matches!(flattened_document, Cow::Owned(_)) {
+                for key in flattened_document.keys() {
+                    self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
+                }
             }
             for key in original_document.keys() {
                 self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
