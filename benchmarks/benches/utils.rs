@@ -1,12 +1,13 @@
 #![allow(dead_code)]
 
 use std::fs::{create_dir_all, remove_dir_all, File};
-use std::io::{BufRead, BufReader, Cursor, Read, Seek};
+use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::Path;
 
 use criterion::BenchmarkId;
 use heed::EnvOpenOptions;
-use milli::documents::{DocumentsBatchBuilder, DocumentsBatchReader};
+use milli::documents::document_formats::PayloadType;
+use milli::documents::{document_formats, DocumentsBatchReader};
 use milli::update::{
     IndexDocuments, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig, Settings,
 };
@@ -19,7 +20,7 @@ pub struct Conf<'a> {
     /// the dataset to be used, it must be an uncompressed csv
     pub dataset: &'a str,
     /// The format of the dataset
-    pub dataset_format: &'a str,
+    pub dataset_format: PayloadType,
     pub group_name: &'a str,
     pub queries: &'a [&'a str],
     /// here you can change which criterion are used and in which order.
@@ -39,7 +40,7 @@ pub struct Conf<'a> {
 impl Conf<'_> {
     pub const BASE: Self = Conf {
         database_name: "benches.mmdb",
-        dataset_format: "csv",
+        dataset_format: PayloadType::Csv,
         dataset: "",
         group_name: "",
         queries: &[],
@@ -136,44 +137,24 @@ pub fn run_benches(c: &mut criterion::Criterion, confs: &[Conf]) {
     }
 }
 
-pub fn documents_from(filename: &str, filetype: &str) -> DocumentsBatchReader<impl Read + Seek> {
+pub fn documents_from(
+    filename: &str,
+    filetype: document_formats::PayloadType,
+) -> DocumentsBatchReader<impl Read + Seek> {
     let reader =
         File::open(filename).expect(&format!("could not find the dataset in: {}", filename));
     let reader = BufReader::new(reader);
-    let documents = match filetype {
-        "csv" => documents_from_csv(reader).unwrap(),
-        "json" => documents_from_json(reader).unwrap(),
-        "jsonl" => documents_from_jsonl(reader).unwrap(),
-        otherwise => panic!("invalid update format {:?}", otherwise),
+    let mut documents = Vec::new();
+    match filetype {
+        document_formats::PayloadType::Ndjson => {
+            document_formats::read_ndjson(reader, Cursor::new(&mut documents)).unwrap()
+        }
+        document_formats::PayloadType::Json => {
+            document_formats::read_json(reader, Cursor::new(&mut documents)).unwrap()
+        }
+        document_formats::PayloadType::Csv => {
+            document_formats::read_csv(reader, Cursor::new(&mut documents)).unwrap()
+        }
     };
     DocumentsBatchReader::from_reader(Cursor::new(documents)).unwrap()
-}
-
-fn documents_from_jsonl(mut reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
-    let mut documents = DocumentsBatchBuilder::new(Vec::new());
-    let mut buf = String::new();
-    while reader.read_line(&mut buf)? > 0 {
-        if buf == "\n" {
-            buf.clear();
-            continue;
-        }
-        documents.append_unparsed_json_object(buf.as_str())?;
-        buf.clear();
-    }
-    documents.into_inner().map_err(Into::into)
-}
-
-fn documents_from_json(reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
-    let mut documents = DocumentsBatchBuilder::new(Vec::new());
-    documents.append_json(reader)?;
-    documents.into_inner().map_err(Into::into)
-}
-
-fn documents_from_csv(reader: impl BufRead) -> anyhow::Result<Vec<u8>> {
-    let csv = csv::Reader::from_reader(reader);
-
-    let mut documents = DocumentsBatchBuilder::new(Vec::new());
-    documents.append_csv(csv)?;
-
-    documents.into_inner().map_err(Into::into)
 }

@@ -1,4 +1,5 @@
 mod builder;
+pub mod document_formats;
 mod document_visitor;
 mod reader;
 

@@ -6,6 +6,7 @@ use std::path::Path;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use heed::{EnvOpenOptions, RwTxn};
+use milli::documents::document_formats::PayloadType;
 use milli::update::{
     DeleteDocuments, IndexDocuments, IndexDocumentsConfig, IndexerConfig, Settings,
 };
@@ -136,7 +137,7 @@ fn indexing_songs_default(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, "csv");
+                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -175,7 +176,7 @@ fn deleting_songs_in_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, "csv");
+                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -232,7 +233,8 @@ fn indexing_songs_in_three_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS_1_2, "csv");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_SONGS_1_2, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -248,7 +250,8 @@ fn indexing_songs_in_three_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS_3_4, "csv");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_SONGS_3_4, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -257,7 +260,8 @@ fn indexing_songs_in_three_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS_4_4, "csv");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_SONGS_4_4, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -296,7 +300,7 @@ fn indexing_songs_without_faceted_numbers(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, "csv");
+                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, PayloadType::Csv);
 
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
@@ -335,7 +339,7 @@ fn indexing_songs_without_faceted_fields(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, "csv");
+                let documents = utils::documents_from(datasets_paths::SMOL_SONGS, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -374,7 +378,8 @@ fn indexing_wiki(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES, "csv");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -413,7 +418,8 @@ fn deleting_wiki_in_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES, "csv");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -472,7 +478,7 @@ fn indexing_wiki_in_three_batches(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
                 let documents =
-                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_1_2, "csv");
+                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_1_2, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -491,7 +497,7 @@ fn indexing_wiki_in_three_batches(c: &mut Criterion) {
                         .unwrap();
 
                 let documents =
-                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_3_4, "csv");
+                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_3_4, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -503,7 +509,7 @@ fn indexing_wiki_in_three_batches(c: &mut Criterion) {
                         .unwrap();
 
                 let documents =
-                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_4_4, "csv");
+                    utils::documents_from(datasets_paths::SMOL_WIKI_ARTICLES_4_4, PayloadType::Csv);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -542,7 +548,7 @@ fn indexing_movies_default(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::MOVIES, "json");
+                let documents = utils::documents_from(datasets_paths::MOVIES, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -580,7 +586,7 @@ fn deleting_movies_in_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::MOVIES, "json");
+                let documents = utils::documents_from(datasets_paths::MOVIES, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -637,7 +643,8 @@ fn indexing_movies_in_three_batches(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::MOVIES_1_2, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::MOVIES_1_2, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -654,7 +661,8 @@ fn indexing_movies_in_three_batches(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::MOVIES_3_4, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::MOVIES_3_4, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -664,7 +672,8 @@ fn indexing_movies_in_three_batches(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::MOVIES_4_4, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::MOVIES_4_4, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -726,7 +735,8 @@ fn indexing_nested_movies_default(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::NESTED_MOVIES, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::NESTED_MOVIES, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -787,7 +797,8 @@ fn deleting_nested_movies_in_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::NESTED_MOVIES, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::NESTED_MOVIES, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -851,7 +862,8 @@ fn indexing_nested_movies_without_faceted_fields(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::NESTED_MOVIES, "json");
+                let documents =
+                    utils::documents_from(datasets_paths::NESTED_MOVIES, PayloadType::Json);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -889,7 +901,8 @@ fn indexing_geo(c: &mut Criterion) {
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
 
-                let documents = utils::documents_from(datasets_paths::SMOL_ALL_COUNTRIES, "jsonl");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_ALL_COUNTRIES, PayloadType::Ndjson);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
@@ -928,7 +941,8 @@ fn deleting_geo_in_batches_default(c: &mut Criterion) {
                 let builder =
                     IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ())
                         .unwrap();
-                let documents = utils::documents_from(datasets_paths::SMOL_ALL_COUNTRIES, "jsonl");
+                let documents =
+                    utils::documents_from(datasets_paths::SMOL_ALL_COUNTRIES, PayloadType::Ndjson);
                 let (builder, user_error) = builder.add_documents(documents).unwrap();
                 user_error.unwrap();
                 builder.execute().unwrap();
