@@ -98,8 +98,9 @@ where
 mod tests {
     use std::io::Cursor;
 
-    use super::*;
     use serde::Deserializer;
+
+    use super::*;
 
     fn deser(input: &str) -> Result<String, serde_json::Error> {
         let mut writer = Vec::new();

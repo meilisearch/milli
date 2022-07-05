@@ -1,7 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-use serde_json::{Map, Value};
 use std::borrow::Cow;
+
+use serde_json::{Map, Value};
 
 fn can_be_flattened(object: &Map<String, Value>) -> bool {
     for value in object.values() {
