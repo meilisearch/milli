@@ -335,7 +335,7 @@ pub fn extract_float_from_value<'bump>(
         Value::UnsignedInteger(ref n) => Ok(*n as f64),
         Value::SignedInteger(ref n) => Ok(*n as f64),
         Value::Float(ref n) => Ok(*n),
-        Value::String(ref s) => s.parse::<f64>().map_err(|_| todo!()),
+        Value::String(ref s) => s.parse::<f64>().map_err(|_| value.into()),
         value => Err(value.into()),
     }
 }

@@ -92,7 +92,7 @@ impl<'bump> Serialize for Value<'bump> {
         S: serde::Serializer,
     {
         match self {
-            Value::Null => serializer.serialize_str("null"),
+            Value::Null => serializer.serialize_none(),
             Value::Bool(x) => serializer.serialize_bool(*x),
             Value::SignedInteger(x) => serializer.serialize_i64(*x),
             Value::UnsignedInteger(x) => serializer.serialize_u64(*x),
