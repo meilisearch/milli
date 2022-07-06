@@ -9,6 +9,11 @@ use thiserror::Error;
 
 use crate::{CriterionError, DocumentId, FieldId, SortError};
 
+/// The raw os error code for the "No Space Left On Device" error.
+const STORAGE_FULL_ERROR_CODE: i32 = 28;
+/// The raw os error code for the "Input/Output error" error.
+const INPUT_OUTPUT_ERROR_CODE: i32 = 5;
+
 pub type Object = Map<String, Value>;
 
 pub fn is_reserved_keyword(keyword: &str) -> bool {
@@ -191,7 +196,13 @@ where
 {
     fn from(error: grenad::Error<E>) -> Error {
         match error {
-            grenad::Error::Io(error) => Error::IoError(error),
+            grenad::Error::Io(error) => match error.raw_os_error() {
+                // `ErrorKind::StorageFull` is nightly for now so we use the raw error codes
+                Some(STORAGE_FULL_ERROR_CODE) | Some(INPUT_OUTPUT_ERROR_CODE) => {
+                    Error::UserError(UserError::NoSpaceLeftOnDevice)
+                }
+                _otherwise => Error::IoError(error),
+            },
             grenad::Error::Merge(error) => Error::from(error),
             grenad::Error::InvalidCompressionType => {
                 Error::InternalError(InternalError::GrenadInvalidCompressionType)
@@ -217,7 +228,13 @@ impl From<HeedError> for Error {
         use self::UserError::*;
 
         match error {
-            HeedError::Io(error) => Error::from(error),
+            HeedError::Io(error) => match error.raw_os_error() {
+                // `ErrorKind::StorageFull` is nightly for now so we use the raw error codes
+                Some(STORAGE_FULL_ERROR_CODE) | Some(INPUT_OUTPUT_ERROR_CODE) => {
+                    UserError(NoSpaceLeftOnDevice)
+                }
+                _otherwise => IoError(error),
+            },
             HeedError::Mdb(MdbError::MapFull) => UserError(MaxDatabaseSizeReached),
             HeedError::Mdb(MdbError::Invalid) => UserError(InvalidStoreFile),
             HeedError::Mdb(error) => InternalError(Store(error)),
