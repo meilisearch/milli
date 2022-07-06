@@ -308,24 +308,12 @@ pub fn resolve_query_tree(
 
         match query_tree {
             And(ops) => {
-                let mut ops = ops
+                let candidates = ops
                     .iter()
                     .map(|op| resolve_operation(ctx, op, wdcache))
                     .collect::<Result<Vec<_>>>()?;
 
-                ops.sort_unstable_by_key(|cds| cds.len());
-
-                let mut candidates = RoaringBitmap::new();
-                let mut first_loop = true;
-                for docids in ops {
-                    if first_loop {
-                        candidates = docids;
-                        first_loop = false;
-                    } else {
-                        candidates &= &docids;
-                    }
-                }
-                Ok(candidates)
+                Ok(candidates.and())
             }
             Or(_, ops) => {
                 let candidates = ops
