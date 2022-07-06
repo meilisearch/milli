@@ -98,9 +98,7 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         let object = bumpalo_json::Map::from(object, &bump);
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
-        let mut serializer =
-            bincode::Serializer::new(&mut self.value_buffer, bincode::DefaultOptions::default());
-        object.serialize(&mut serializer)?;
+        bumpalo_json::serialize_map(&object, &mut self.value_buffer)?;
         self.writer.insert(internal_id, &self.value_buffer)?;
         self.documents_count += 1;
         Ok(())

@@ -311,7 +311,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                 // 2. flattening the json
                 // 3. writing it into the flattened sorter
                 let reader = KvReader::new(base_obkv);
-                let mut document = bumpalo::collections::vec::Vec::new_in(&bump);
+                let mut document = bumpalo::collections::vec::Vec::with_capacity_in(16, &bump);
                 for (field_id, value) in reader.iter() {
                     let key: &str = bump.alloc_str(self.fields_ids_map.name(field_id).unwrap()); // TODO: error handling
                     let value = bumpalo_json::deserialize_bincode_slice(value, &bump).unwrap(); // TODO: error handling
@@ -554,6 +554,8 @@ impl<'a, 'i> Transform<'a, 'i> {
         );
 
         let mut obkv_buffer = Vec::new();
+        let mut value_bytes = Vec::<u8>::with_capacity(1024);
+
         let mut bump = bumpalo::Bump::new();
         for result in self.index.documents.iter(wtxn)? {
             bump.reset();
@@ -575,7 +577,8 @@ impl<'a, 'i> Transform<'a, 'i> {
 
             // Once we have the document. We're going to flatten it
             // and insert it in the flattened sorter.
-            let mut doc = bumpalo_json::Map(bumpalo::collections::vec::Vec::new_in(&bump));
+            let mut doc =
+                bumpalo_json::Map(bumpalo::collections::vec::Vec::with_capacity_in(16, &bump));
 
             let reader = obkv::KvReader::new(buffer);
             for (k, v) in reader.iter() {
@@ -603,12 +606,11 @@ impl<'a, 'i> Transform<'a, 'i> {
             for (key, value) in flattened {
                 let fid =
                     new_fields_ids_map.insert(&key).ok_or(UserError::AttributeLimitReached)?;
-                // TODO: avoid alloc
-                let mut value_bytes = Vec::with_capacity(1024);
                 let mut serializer =
                     bincode::Serializer::new(&mut value_bytes, bincode::DefaultOptions::default());
                 value.as_ref().serialize(&mut serializer).map_err(InternalError::Bincode)?;
                 writer.insert(fid, &value_bytes)?;
+                value_bytes.clear();
             }
             flattened_writer.insert(docid.to_be_bytes(), &buffer)?;
         }

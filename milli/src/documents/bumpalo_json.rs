@@ -423,7 +423,7 @@ impl<'de, 'bump> Visitor<'de> for ValueVisitor<'bump> {
         A: serde::de::SeqAccess<'de>,
     {
         let seed = ValueJsonBumpSeed { bump: &self.bump };
-        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        let mut vector = BumpVec::with_capacity_in(seq.size_hint().unwrap_or(16), &self.bump);
         while let Some(value) = seq.next_element_seed(seed)? {
             vector.push(MaybeMut::Ref(self.bump.alloc(value)));
         }
@@ -435,7 +435,7 @@ impl<'de, 'bump> Visitor<'de> for ValueVisitor<'bump> {
     {
         let key_seed = StringBumpSeed { bump: &self.bump };
         let value_seed = ValueJsonBumpSeed { bump: &self.bump };
-        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        let mut vector = BumpVec::with_capacity_in(map.size_hint().unwrap_or(16), &self.bump);
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
         }
@@ -458,7 +458,7 @@ impl<'de, 'bump> Visitor<'de> for JsonSeqVisitor<'bump> {
         A: serde::de::SeqAccess<'de>,
     {
         let seed = ValueEnumBumpSeed { bump: &self.bump };
-        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        let mut vector = BumpVec::with_capacity_in(seq.size_hint().unwrap_or(16), &self.bump);
         while let Some(value) = seq.next_element_seed(seed)? {
             vector.push(MaybeMut::Ref(self.bump.alloc(value)));
         }
@@ -491,7 +491,7 @@ impl<'de, 'bump> Visitor<'de> for MapEnumVisitor<'bump> {
     {
         let key_seed = StringBumpSeed { bump: &self.bump };
         let value_seed = ValueEnumBumpSeed { bump: &self.bump };
-        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        let mut vector = BumpVec::with_capacity_in(map.size_hint().unwrap_or(16), &self.bump);
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
         }
@@ -525,7 +525,7 @@ impl<'de, 'bump> Visitor<'de> for MapJsonVisitor<'bump> {
     {
         let key_seed = StringBumpSeed { bump: &self.bump };
         let value_seed = ValueJsonBumpSeed { bump: &self.bump };
-        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        let mut vector = BumpVec::with_capacity_in(map.size_hint().unwrap_or(16), &self.bump);
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
         }
@@ -570,21 +570,6 @@ pub fn deserialize_bincode_slice<'s, 'bump>(
 
     ValueEnumBumpSeed { bump }.deserialize(&mut de)
 }
-
-// pub fn serialize_json<'bump, W>(j: &Value<'bump>, writer: W) -> Result<(), serde_json::Error>
-// where
-//     W: std::io::Write,
-// {
-//     let mut serializer = serde_json::ser::Serializer::new(writer);
-//     j.serialize(&mut serializer)
-// }
-// pub fn serialize_map<'bump, W>(j: &Map<'bump>, writer: W) -> Result<(), serde_json::Error>
-// where
-//     W: std::io::Write,
-// {
-//     let mut serializer = serde_json::ser::Serializer::new(writer);
-//     j.serialize(&mut serializer)
-// }
 
 pub fn serialize_bincode<'bump, W>(j: &Value<'bump>, writer: W) -> Result<(), bincode::Error>
 where

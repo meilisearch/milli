@@ -70,6 +70,8 @@ pub fn enrich_documents_batch<R: Read + Seek>(
     let look_for_geo_field = index.sortable_fields(rtxn)?.contains("_geo");
     let mut count = 0;
 
+    let mut document_id_bytes = Vec::<u8>::with_capacity(1024);
+
     let mut bump = Bump::new();
     loop {
         bump.reset();
@@ -99,12 +101,11 @@ pub fn enrich_documents_batch<R: Read + Seek>(
             }
         }
 
-        // TODO: avoid alloc
-        let mut document_id_bytes = Vec::with_capacity(1024);
         let mut serializer =
             bincode::Serializer::new(&mut document_id_bytes, bincode::DefaultOptions::default());
         document_id.serialize(&mut serializer).map_err(InternalError::Bincode)?;
-        external_ids.insert(count.to_be_bytes(), document_id_bytes)?;
+        external_ids.insert(count.to_be_bytes(), &document_id_bytes)?;
+        document_id_bytes.clear();
         count += 1;
     }
 
