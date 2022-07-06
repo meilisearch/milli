@@ -327,7 +327,6 @@ pub fn resolve_query_tree(
                 }
                 Ok(candidates)
             }
-            Phrase(words) => resolve_phrase(ctx, &words),
             Or(_, ops) => {
                 let candidates = ops
                     .into_iter()
@@ -336,6 +335,7 @@ pub fn resolve_query_tree(
 
                 Ok(candidates.or())
             }
+            Phrase(words) => resolve_phrase(ctx, &words),
             Query(q) => Ok(query_docids(ctx, q, wdcache)?),
         }
     }
