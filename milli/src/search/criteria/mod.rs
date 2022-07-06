@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::result::Result as StdResult;
 
-use roaring::RoaringBitmap;
+use roaring::{IterExt, RoaringBitmap};
 
 use self::asc_desc::AscDesc;
 use self::attribute::Attribute;
@@ -386,16 +387,17 @@ fn all_word_pair_proximity_docids<T: AsRef<str>, U: AsRef<str>>(
     right_words: &[(U, u8)],
     proximity: u8,
 ) -> Result<RoaringBitmap> {
-    let mut docids = RoaringBitmap::new();
-    for (left, _l_typo) in left_words {
-        for (right, _r_typo) in right_words {
-            let current_docids = ctx
-                .word_pair_proximity_docids(left.as_ref(), right.as_ref(), proximity)?
-                .unwrap_or_default();
-            docids |= current_docids;
-        }
-    }
-    Ok(docids)
+    let docids = left_words
+        .into_iter()
+        .flat_map(|(left, _l_typo)| {
+            right_words.into_iter().map(move |(right, _r_typo)| {
+                ctx.word_pair_proximity_docids(left.as_ref(), right.as_ref(), proximity)
+                    .map(|res| res.unwrap_or_default())
+            })
+        })
+        .collect::<StdResult<Vec<RoaringBitmap>, _>>()?;
+
+    Ok(docids.or())
 }
 
 fn query_docids(
