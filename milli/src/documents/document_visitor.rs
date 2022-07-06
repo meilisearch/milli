@@ -18,9 +18,8 @@ use std::io::Write;
 use bumpalo::Bump;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
-use crate::documents::{DocumentsBatchBuilder, Error};
-
 use super::bumpalo_json::{self, MaybeMut, StringBumpSeed, ValueJsonBumpSeed};
+use crate::documents::{DocumentsBatchBuilder, Error};
 
 /// A Visitor that passes each visited Json object to a `DocumentsBatchBuilder`
 /// so that it is written to a file.

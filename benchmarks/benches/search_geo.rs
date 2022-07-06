@@ -2,7 +2,8 @@ mod datasets_paths;
 mod utils;
 
 use criterion::{criterion_group, criterion_main};
-use milli::{documents::document_formats::PayloadType, update::Settings};
+use milli::documents::document_formats::PayloadType;
+use milli::update::Settings;
 use utils::Conf;
 
 #[cfg(target_os = "linux")]

@@ -5,7 +5,6 @@ use bumpalo::Bump;
 
 use super::bumpalo_json::{self, Map};
 use super::Error;
-use crate::Object;
 
 /// The `DocumentsBatchReader` provides a way to iterate over documents that have been created with
 /// a `DocumentsBatchWriter`.

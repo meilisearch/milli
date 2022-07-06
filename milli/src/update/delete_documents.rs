@@ -7,7 +7,6 @@ use heed::types::{ByteSlice, Str};
 use heed::{BytesDecode, BytesEncode, Database};
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::ClearDocuments;

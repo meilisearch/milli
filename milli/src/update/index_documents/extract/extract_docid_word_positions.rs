@@ -6,7 +6,6 @@ use std::{io, mem, str};
 use bumpalo::Bump;
 use charabia::{SeparatorKind, Token, TokenKind, TokenizerBuilder};
 use roaring::RoaringBitmap;
-use serde_json::Value;
 
 use super::helpers::{concat_u32s_array, create_sorter, sorter_into_reader, GrenadParameters};
 use crate::documents::bumpalo_json;

@@ -2,11 +2,9 @@ use std::io::BufRead;
 
 use bumpalo::collections::vec::Vec as BumpVec;
 use bumpalo::Bump;
-use serde::{
-    de::{DeserializeSeed, VariantAccess, Visitor},
-    ser::{SerializeMap, SerializeSeq},
-    Deserialize, Deserializer, Serialize,
-};
+use serde::de::{DeserializeSeed, VariantAccess, Visitor};
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Number;
 
 use crate::Object;
@@ -29,11 +27,9 @@ where
 {
     type Value = &'bump str;
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a string")
     }
-    #[inline]
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -41,7 +37,6 @@ where
         let s = self.bump.alloc_str(v);
         Ok(s)
     }
-    #[inline]
     fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -59,12 +54,10 @@ where
 {
     type Value = &'bump [u8];
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a string")
     }
 
-    #[inline]
     fn visit_borrowed_bytes<E>(self, v: &'de [u8]) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -72,7 +65,6 @@ where
         Ok(v)
     }
 
-    #[inline]
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -88,7 +80,6 @@ where
 {
     type Value = &'bump str;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -104,7 +95,6 @@ where
 {
     type Value = &'bump str;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -145,7 +135,6 @@ pub enum Value<'bump> {
     Map(Map<'bump>),
 }
 impl<'bump> Serialize for Map<'bump> {
-    #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -158,7 +147,6 @@ impl<'bump> Serialize for Map<'bump> {
     }
 }
 impl<'bump> Serialize for Value<'bump> {
-    #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -189,7 +177,6 @@ impl<'bump> Serialize for Value<'bump> {
 struct SerializableSequence<'a, 'bump>(&'a Seq<'bump>);
 
 impl<'a, 'bump> Serialize for SerializableSequence<'a, 'bump> {
-    #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -228,7 +215,6 @@ where
 {
     type Value = Value<'bump>;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -263,7 +249,6 @@ where
 {
     type Value = Value<'bump>;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -291,11 +276,9 @@ enum ValueKind {
 struct ValueKindVisitor;
 impl<'de> Visitor<'de> for ValueKindVisitor {
     type Value = ValueKind;
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "variant identifier")
     }
-    #[inline]
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -317,7 +300,6 @@ impl<'de> Visitor<'de> for ValueKindVisitor {
     }
 }
 impl<'de> Deserialize<'de> for ValueKind {
-    #[inline]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -332,12 +314,10 @@ where
 {
     type Value = Value<'bump>;
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a valid Json value")
     }
 
-    #[inline]
     fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::EnumAccess<'de>,
@@ -379,28 +359,24 @@ where
         }
     }
 
-    #[inline]
     fn visit_none<E>(self) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         Ok(Value::Null)
     }
-    #[inline]
     fn visit_unit<E>(self) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         Ok(Value::Null)
     }
-    #[inline]
     fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         Ok(Value::Bool(v))
     }
-    #[inline]
     fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -408,7 +384,6 @@ where
         Ok(Value::Float(v))
     }
 
-    #[inline]
     fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -416,7 +391,6 @@ where
         Ok(Value::UnsignedInteger(v))
     }
 
-    #[inline]
     fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -424,7 +398,6 @@ where
         Ok(Value::SignedInteger(v))
     }
 
-    #[inline]
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -432,7 +405,6 @@ where
         let s: &'bump str = self.bump.alloc_str(v);
         Ok(Value::String(s))
     }
-    #[inline]
     fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -440,7 +412,6 @@ where
         Ok(Value::String(v))
     }
 
-    #[inline]
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::SeqAccess<'de>,
@@ -452,7 +423,6 @@ where
         }
         Ok(Value::Sequence(vector))
     }
-    #[inline]
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::MapAccess<'de>,
@@ -476,12 +446,10 @@ where
 {
     type Value = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a valid Json array")
     }
 
-    #[inline]
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::SeqAccess<'de>,
@@ -500,7 +468,6 @@ where
 {
     type Value = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -517,12 +484,10 @@ where
 {
     type Value = Map<'bump>;
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a valid Json object")
     }
 
-    #[inline]
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::MapAccess<'de>,
@@ -542,7 +507,6 @@ where
 {
     type Value = Map<'bump>;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -560,12 +524,10 @@ where
 {
     type Value = Map<'bump>;
 
-    #[inline]
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a valid Json object")
     }
 
-    #[inline]
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
     where
         A: serde::de::MapAccess<'de>,
@@ -585,7 +547,6 @@ where
 {
     type Value = Map<'bump>;
 
-    #[inline]
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
@@ -778,7 +739,6 @@ fn insert_value<'bump>(
 }
 
 impl<'bump> From<&'bump Value<'bump>> for serde_json::Value {
-    #[inline]
     fn from(v: &'bump Value<'bump>) -> Self {
         match v {
             Value::Null => serde_json::Value::Null,
@@ -801,7 +761,6 @@ impl<'bump> From<&'bump Value<'bump>> for serde_json::Value {
     }
 }
 impl<'bump> From<&'bump Map<'bump>> for Object {
-    #[inline]
     fn from(map: &'bump Map<'bump>) -> Self {
         let mut object = Object::new();
         for (key, value) in map.0.iter() {
@@ -812,7 +771,6 @@ impl<'bump> From<&'bump Map<'bump>> for Object {
 }
 
 impl<'bump> std::fmt::Display for Value<'bump> {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Null => write!(f, "null"),
@@ -891,65 +849,5 @@ impl<'bump> Map<'bump> {
             ));
         }
         Map(map)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bumpalo::Bump;
-    use std::mem::size_of;
-
-    #[inline]
-    fn deserialize_bump_json<'r, 'bump>(
-        reader: impl serde_json::de::Read<'r>,
-        bump: &'bump Bump,
-    ) -> Result<Value<'bump>, serde_json::Error> {
-        let mut de = serde_json::de::Deserializer::new(reader);
-
-        ValueEnumBumpSeed { bump }.deserialize(&mut de)
-    }
-
-    #[inline]
-    fn deserialize_json_str<'s, 'bump>(
-        s: &'s str,
-        bump: &'bump Bump,
-    ) -> Result<Value<'bump>, serde_json::Error> {
-        let reader = serde_json::de::StrRead::new(s);
-        let mut de = serde_json::de::Deserializer::new(reader);
-
-        ValueEnumBumpSeed { bump }.deserialize(&mut de)
-    }
-
-    #[test]
-    #[inline]
-    fn size_types() {
-        let size = size_of::<Value<'_>>();
-        println!("{size}");
-
-        let size = size_of::<&'_ (&'_ str, Value<'_>)>();
-        println!("{size}");
-    }
-
-    #[test]
-    #[inline]
-    fn deser() {
-        let bump = Bump::new();
-        let j = serde_json::json!({
-            "a.b": [1, 2],
-            "a.b": "k",
-            "a": {
-                "b": "c",
-                "d": "e",
-                "f": "g",
-                "b": "h"
-            }
-        });
-        let j = j.as_object().unwrap();
-        let j = Map::from(j, &bump);
-
-        let f = flatten(bump.alloc(j), &bump);
-        let f = std::mem::replace(&mut f.0, BumpVec::with_capacity_in(0, &bump));
-        println!("{}", Value::Map(Map(f)));
     }
 }

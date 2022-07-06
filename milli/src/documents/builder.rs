@@ -3,14 +3,13 @@ use std::io::Write;
 
 use bumpalo::Bump;
 use grenad::{CompressionType, WriterBuilder};
-use serde::{de::Deserializer, Serialize};
-use serde_json::{Number, Value};
+use serde::de::Deserializer;
+use serde::Serialize;
 
+use super::bumpalo_json::{self, Map, MaybeMut};
 use crate::documents::document_visitor::DocumentVisitor;
 use crate::documents::Error;
 use crate::Object;
-
-use super::bumpalo_json::{self, Map, MaybeMut};
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///

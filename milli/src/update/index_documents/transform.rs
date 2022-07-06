@@ -1,3 +1,9 @@
+use std::borrow::Cow;
+use std::collections::hash_map::Entry;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+
 use bumpalo::Bump;
 use byteorder::ReadBytesExt;
 use fxhash::FxHashMap;
@@ -7,11 +13,6 @@ use obkv::{KvReader, KvWriter};
 use roaring::RoaringBitmap;
 use serde::Serialize;
 use smartstring::SmartString;
-use std::borrow::Cow;
-use std::collections::hash_map::Entry;
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 
 use super::enriched::EnrichedBumpDocument;
 use super::helpers::{create_sorter, create_writer, keep_latest_obkv, merge_obkvs, MergeFn};

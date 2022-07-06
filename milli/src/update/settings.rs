@@ -961,7 +961,7 @@ mod tests {
             let json = crate::obkv_to_document(
                 &fidmap.ids().collect::<Vec<_>>(),
                 &fidmap,
-                document.1,
+                &document.1,
                 &bump,
             )
             .unwrap();

@@ -5,9 +5,8 @@ use std::io::{self, BufRead, Seek, Write};
 use bumpalo::Bump;
 use serde::de::DeserializeSeed;
 
-use crate::documents::{DocumentsBatchBuilder, Error};
-
 use super::bumpalo_json::MapJsonVisitor;
+use crate::documents::{DocumentsBatchBuilder, Error};
 
 type Result<T> = std::result::Result<T, DocumentFormatError>;
 

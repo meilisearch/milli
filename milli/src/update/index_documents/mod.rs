@@ -833,7 +833,7 @@ mod tests {
             .unwrap();
         let kevin_uuid =
             match bumpalo_json::deserialize_bincode_slice(&obkv.get(1).unwrap(), &bump).unwrap() {
-                bumpalo_json::Value::String(s) => s,
+                bumpalo_json::Value::String(s) => s.to_string(),
                 _ => panic!(),
             };
         // let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
