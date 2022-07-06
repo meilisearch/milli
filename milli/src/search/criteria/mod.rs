@@ -329,12 +329,12 @@ pub fn resolve_query_tree(
             }
             Phrase(words) => resolve_phrase(ctx, &words),
             Or(_, ops) => {
-                let mut candidates = RoaringBitmap::new();
-                for op in ops {
-                    let docids = resolve_operation(ctx, op, wdcache)?;
-                    candidates |= docids;
-                }
-                Ok(candidates)
+                let candidates = ops
+                    .into_iter()
+                    .map(|op| resolve_operation(ctx, op, wdcache))
+                    .collect::<StdResult<Vec<_>, _>>()?;
+
+                Ok(candidates.or())
             }
             Query(q) => Ok(query_docids(ctx, q, wdcache)?),
         }
