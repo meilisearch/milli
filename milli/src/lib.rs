@@ -81,10 +81,10 @@ pub fn absolute_from_relative_position(field_id: FieldId, relative: RelativePosi
 }
 
 /// Transform a raw obkv store into a JSON Object.
-pub fn obkv_to_document<'bump>(
+pub fn obkv_to_document<'bump, 'obkv: 'bump>(
     displayed_fields: &[FieldId],
     fields_ids_map: &FieldsIdsMap,
-    obkv: obkv::KvReaderU16,
+    obkv: &'obkv obkv::KvReaderU16,
     bump: &'bump Bump,
 ) -> Result<bumpalo_json::Map<'bump>> {
     let mut map = bumpalo::collections::vec::Vec::new_in(bump);

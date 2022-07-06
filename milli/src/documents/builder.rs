@@ -10,7 +10,7 @@ use crate::documents::document_visitor::DocumentVisitor;
 use crate::documents::Error;
 use crate::Object;
 
-use super::bumpalo_json::{self, Map};
+use super::bumpalo_json::{self, Map, MaybeMut};
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///
@@ -37,27 +37,6 @@ pub struct DocumentsBatchBuilder<W> {
     /// A buffer to serialize the values and avoid reallocating,
     /// serialized values are stored in an obkv.
     value_buffer: Vec<u8>,
-}
-
-#[derive(Default)]
-struct StringAllocations {
-    strings: Vec<String>,
-}
-impl StringAllocations {
-    fn take_one(&mut self) -> String {
-        self.strings.pop().unwrap_or_else(|| String::new())
-    }
-    fn reclaim_from_object(&mut self, object: &mut Object) {
-        for value in object.values_mut() {
-            match value.take() {
-                Value::String(mut s) => {
-                    s.clear();
-                    self.strings.push(s);
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 impl<W: Write> DocumentsBatchBuilder<W> {
@@ -133,43 +112,38 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         let fields: Vec<(String, AllowedType)> =
             reader.headers()?.into_iter().map(parse_csv_header).collect();
 
-        let mut object = Object::new();
-        for (key, _) in fields.iter() {
-            let key = key.to_string();
-            object.insert(key, Value::Null);
-        }
-
-        let mut string_allocs = StringAllocations::default();
-
         let mut record = csv::StringRecord::new();
         let mut line = 0;
 
-        let mut bump = Bump::new();
+        let bump_keys = Bump::new();
+        let mut bump_object = Bump::new();
+
+        let mut keys = bumpalo::collections::vec::Vec::with_capacity_in(fields.len(), &bump_keys);
+        for (key, _) in fields.iter() {
+            let key = bump_keys.alloc_str(key);
+            keys.push(key);
+        }
+
         while reader.read_record(&mut record)? {
-            bump.reset();
+            bump_object.reset();
+            let mut object = bumpalo_json::Map(bumpalo::collections::vec::Vec::with_capacity_in(
+                fields.len(),
+                &bump_object,
+            ));
+
             // We increment here and not at the end of the while loop to take
             // the header offset into account.
             line += 1;
-            for (i, ((_, type_), value_builder)) in
-                fields.iter().zip(object.values_mut()).enumerate()
-            {
+            for (i, ((_, type_), key)) in fields.iter().zip(keys.iter()).enumerate() {
                 let value = &record[i];
-                match type_ {
+                let object_value = match type_ {
                     AllowedType::Number => {
                         let trimmed_value = value.trim();
                         if trimmed_value.is_empty() {
-                            *value_builder = Value::Null;
+                            bumpalo_json::Value::Null
                         } else {
                             match trimmed_value.parse::<f64>() {
-                                Ok(float) => {
-                                    if let Some(number) = Number::from_f64(float) {
-                                        *value_builder = Value::Number(number);
-                                    } else {
-                                        let mut string = string_allocs.take_one();
-                                        string.push_str(trimmed_value);
-                                        *value_builder = Value::String(string);
-                                    }
-                                }
+                                Ok(float) => bumpalo_json::Value::Float(float),
                                 Err(error) => {
                                     return Err(Error::ParseFloat {
                                         error,
@@ -182,14 +156,14 @@ impl<W: Write> DocumentsBatchBuilder<W> {
                     }
                     AllowedType::String => {
                         if value.is_empty() {
-                            *value_builder = Value::Null;
+                            bumpalo_json::Value::Null
                         } else {
-                            let mut string = string_allocs.take_one();
-                            string.push_str(value);
-                            *value_builder = Value::String(string);
+                            let string = bump_object.alloc_str(value) as &_;
+                            bumpalo_json::Value::String(string)
                         }
                     }
-                }
+                };
+                object.0.push((key as &str, MaybeMut::Ref(bump_object.alloc(object_value))));
             }
 
             let internal_id = self.documents_count.to_be_bytes();
@@ -198,11 +172,9 @@ impl<W: Write> DocumentsBatchBuilder<W> {
                 &mut self.value_buffer,
                 bincode::DefaultOptions::default(),
             );
-            let bump_object = bumpalo_json::Map::from(&object, &bump);
-            bump_object.serialize(&mut serializer)?;
 
+            object.serialize(&mut serializer)?;
             self.writer.insert(internal_id, &self.value_buffer)?;
-            string_allocs.reclaim_from_object(&mut object);
             self.documents_count += 1;
         }
 

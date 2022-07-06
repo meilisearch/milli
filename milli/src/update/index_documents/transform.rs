@@ -318,30 +318,33 @@ impl<'a, 'i> Transform<'a, 'i> {
                     document.push((key, bumpalo_json::MaybeMut::Mut(bump.alloc(value))));
                 }
                 let document: &_ = bump.alloc(bumpalo_json::Map(document));
-                let flattened_document = bumpalo_json::flatten(document, &bump);
-                // match flattened_document {
-                //     Cow::Owned(flattened_document) => {
-                write_document_to_sorters_as_obkv(
-                    flattened_document,
-                    internal_id,
-                    &self.fields_ids_map,
-                    [&mut self.flattened_sorter],
-                    &mut write_docs_buffers,
-                )?;
-                // }
-                // Cow::Borrowed(_) => {
-                //     self.flattened_sorter.insert(&internal_id.to_be_bytes(), base_obkv)?;
-                // }
-                // }
+                let (was_flattened, flattened_document) = bumpalo_json::flatten(document, &bump);
+                match was_flattened {
+                    true => {
+                        write_document_to_sorters_as_obkv(
+                            flattened_document,
+                            internal_id,
+                            &self.fields_ids_map,
+                            [&mut self.flattened_sorter],
+                            &mut write_docs_buffers,
+                        )?;
+                    }
+                    false => {
+                        self.flattened_sorter.insert(&internal_id.to_be_bytes(), base_obkv)?;
+                    }
+                }
             } else {
                 self.new_documents_ids.insert(internal_id);
             }
 
-            let flattened_document = bumpalo_json::flatten(&original_document, &bump);
+            let (was_flattened, flattened_document) =
+                bumpalo_json::flatten(&original_document, &bump);
 
             // Step 3.
-            for (key, _) in flattened_document.0.iter() {
-                self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
+            if was_flattened {
+                for (key, _) in flattened_document.0.iter() {
+                    self.fields_ids_map.insert(key).ok_or(UserError::AttributeLimitReached)?;
+                }
             }
             // TODO: remove when the flattened document is guaranteed to contain all the keys of the original document
             for (key, _) in original_document.0.iter() {
@@ -349,33 +352,33 @@ impl<'a, 'i> Transform<'a, 'i> {
             }
 
             // // Step 4.
-            // match flattened_document {
-            //     Cow::Borrowed(_) => {
-            //         write_document_to_sorters_as_obkv(
-            //             original_document,
-            //             internal_id,
-            //             &self.fields_ids_map,
-            //             [&mut self.original_sorter, &mut self.flattened_sorter],
-            //             &mut write_docs_buffers,
-            //         )?;
-            //     }
-            //     Cow::Owned(flattened_document) => {
-            write_document_to_sorters_as_obkv(
-                flattened_document,
-                internal_id,
-                &self.fields_ids_map,
-                [&mut self.flattened_sorter],
-                &mut write_docs_buffers,
-            )?;
-            write_document_to_sorters_as_obkv(
-                &original_document,
-                internal_id,
-                &self.fields_ids_map,
-                [&mut self.original_sorter],
-                &mut write_docs_buffers,
-            )?;
-            //     }
-            // }
+            match was_flattened {
+                false => {
+                    write_document_to_sorters_as_obkv(
+                        original_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.original_sorter, &mut self.flattened_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                }
+                true => {
+                    write_document_to_sorters_as_obkv(
+                        flattened_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.flattened_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                    write_document_to_sorters_as_obkv(
+                        &original_document,
+                        internal_id,
+                        &self.fields_ids_map,
+                        [&mut self.original_sorter],
+                        &mut write_docs_buffers,
+                    )?;
+                }
+            }
 
             documents_count += 1;
 
@@ -591,7 +594,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                 doc.0.push((bump.alloc_str(key), bumpalo_json::MaybeMut::Ref(bump.alloc(value))));
             }
             let doc = bump.alloc(doc);
-            let flattened = bumpalo_json::flatten(doc, &bump);
+            let (_, flattened) = bumpalo_json::flatten(doc, &bump);
 
             // Once we have the flattened version we can convert it back to obkv and
             // insert all the new generated fields_ids (if any) in the fields ids map.

@@ -112,17 +112,18 @@ pub fn read_ndjson(mut input: impl BufRead, writer: impl Write + Seek) -> Result
         }
         let mut de = serde_json::Deserializer::from_str(&buf);
         let seed = MapJsonVisitor { bump: &bump };
-        let json = seed.deserialize(&mut de).map_err(|e| {
-            DocumentFormatError::MalformedPayload(
-                crate::documents::Error::Json(e),
-                PayloadType::Ndjson,
-            )
-        })?;
-        builder
-            .append_bump_json_object(&json)
-            .map_err(Into::into)
-            .map_err(DocumentFormatError::Internal)?;
-
+        {
+            let json = seed.deserialize(&mut de).map_err(|e| {
+                DocumentFormatError::MalformedPayload(
+                    crate::documents::Error::Json(e),
+                    PayloadType::Ndjson,
+                )
+            })?;
+            builder
+                .append_bump_json_object(&json)
+                .map_err(Into::into)
+                .map_err(DocumentFormatError::Internal)?;
+        }
         buf.clear();
     }
 

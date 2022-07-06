@@ -20,7 +20,7 @@ use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 use crate::documents::{DocumentsBatchBuilder, Error};
 
-use super::bumpalo_json::{self, MaybeMut, StringBumpSeed, ValueEnumBumpSeed, ValueJsonBumpSeed};
+use super::bumpalo_json::{self, MaybeMut, StringBumpSeed, ValueJsonBumpSeed};
 
 /// A Visitor that passes each visited Json object to a `DocumentsBatchBuilder`
 /// so that it is written to a file.
