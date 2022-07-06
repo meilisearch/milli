@@ -20,7 +20,7 @@ use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 
 use crate::documents::{DocumentsBatchBuilder, Error};
 
-use super::bumpalo_json::{self, JsonValueBumpSeed, MaybeMut, StringBumpSeed};
+use super::bumpalo_json::{self, MaybeMut, StringBumpSeed, ValueEnumBumpSeed, ValueJsonBumpSeed};
 
 /// A Visitor that passes each visited Json object to a `DocumentsBatchBuilder`
 /// so that it is written to a file.
@@ -63,10 +63,9 @@ impl<'a, 'de, W: Write> Visitor<'de> for &mut DocumentVisitor<'a, W> {
     {
         let mut object = bumpalo::collections::vec::Vec::new_in(&self.bump);
         let key_seed = StringBumpSeed { bump: &self.bump };
-        let value_seed = JsonValueBumpSeed { bump: &self.bump };
-        // Note that here we call serde_json's normal `next_entry` method, which
-        // does not use our visitor. So we deserialize each field of the object normally.
-        // And we add each field to our object.
+        let value_seed = ValueJsonBumpSeed { bump: &self.bump };
+        // Note that here the seeds we give to `next_entry_seed` do not use our visitor.
+        // So we deserialize each field of the object normally. And we add each field to our object.
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             object.push((key, MaybeMut::Ref(self.bump.alloc(value))));
         }
@@ -125,7 +124,11 @@ mod tests {
         let mut cursor = reader.into_cursor().unwrap();
         let mut output = String::new();
         while let Some((_, value)) = cursor.move_on_next().unwrap() {
-            output.push_str(&String::from_utf8_lossy(value));
+            let deserialized: &_ =
+                bump.alloc(bumpalo_json::deserialize_map_slice(value, &bump).unwrap());
+            let object = crate::Object::from(deserialized);
+            let string = serde_json::to_string(&object).unwrap();
+            output.push_str(&string);
         }
         Ok(output)
     }

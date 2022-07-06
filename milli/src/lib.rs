@@ -17,6 +17,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::hash::BuildHasherDefault;
 
+use bumpalo::Bump;
+use documents::bumpalo_json;
 pub use filter_parser::{Condition, FilterCondition};
 use fxhash::{FxHasher32, FxHasher64};
 pub use grenad::CompressionType;
@@ -79,12 +81,14 @@ pub fn absolute_from_relative_position(field_id: FieldId, relative: RelativePosi
 }
 
 /// Transform a raw obkv store into a JSON Object.
-pub fn obkv_to_json(
+pub fn obkv_to_document<'bump>(
     displayed_fields: &[FieldId],
     fields_ids_map: &FieldsIdsMap,
     obkv: obkv::KvReaderU16,
-) -> Result<Object> {
-    displayed_fields
+    bump: &'bump Bump,
+) -> Result<bumpalo_json::Map<'bump>> {
+    let mut map = bumpalo::collections::vec::Vec::new_in(bump);
+    let kvs = displayed_fields
         .iter()
         .copied()
         .flat_map(|id| obkv.get(id).map(|value| (id, value)))
@@ -93,10 +97,18 @@ pub fn obkv_to_json(
                 field_id: id,
                 process: "obkv_to_json",
             })?;
-            let value = serde_json::from_slice(value).map_err(error::InternalError::SerdeJson)?;
-            Ok((name.to_owned(), value))
-        })
-        .collect()
+            let value = bumpalo_json::deserialize_bincode_slice(value, bump)
+                .map_err(error::InternalError::Bincode)?;
+            Result::<_>::Ok((name.to_owned(), value))
+        });
+    for kv in kvs {
+        let (key, value) = kv?;
+        map.push((
+            bump.alloc_str(key.as_str()) as &_,
+            bumpalo_json::MaybeMut::Ref(bump.alloc(value)),
+        ));
+    }
+    Ok(bumpalo_json::Map(map))
 }
 
 /// Transform a JSON value into a string that can be indexed.

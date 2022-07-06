@@ -607,11 +607,12 @@ mod tests {
     use std::io::Cursor;
 
     use big_s::S;
+    use bumpalo::Bump;
     use heed::EnvOpenOptions;
     use maplit::hashset;
 
     use super::*;
-    use crate::documents::DocumentsBatchBuilder;
+    use crate::documents::{bumpalo_json, DocumentsBatchBuilder};
     use crate::update::DeleteDocuments;
 
     #[test]
@@ -724,8 +725,8 @@ mod tests {
 
         // Check that this document is equal to the last one sent.
         let mut doc_iter = doc.iter();
-        assert_eq!(doc_iter.next(), Some((0, &b"1"[..])));
-        assert_eq!(doc_iter.next(), Some((1, &br#""benoit""#[..])));
+        assert_eq!(doc_iter.next(), Some((0, &b"\x03\x01"[..])));
+        assert_eq!(doc_iter.next(), Some((1, &b"\x05\x06benoit"[..])));
         assert_eq!(doc_iter.next(), None);
         drop(rtxn);
 
@@ -752,9 +753,9 @@ mod tests {
 
         // Check that this document is equal to the last one sent.
         let mut doc_iter = doc.iter();
-        assert_eq!(doc_iter.next(), Some((0, &b"1"[..])));
-        assert_eq!(doc_iter.next(), Some((1, &br#""benoit""#[..])));
-        assert_eq!(doc_iter.next(), Some((2, &b"25"[..])));
+        assert_eq!(doc_iter.next(), Some((0, &b"\x03\x01"[..])));
+        assert_eq!(doc_iter.next(), Some((1, &b"\x05\x06benoit"[..])));
+        assert_eq!(doc_iter.next(), Some((2, &b"\x03\x19"[..])));
         assert_eq!(doc_iter.next(), None);
         drop(rtxn);
     }
@@ -817,10 +818,25 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
         let count = index.number_of_documents(&rtxn).unwrap();
         assert_eq!(count, 3);
-
+        let bump = Bump::new();
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
-        let (_id, obkv) = docs.iter().find(|(_id, kv)| kv.get(0) == Some(br#""kevin""#)).unwrap();
-        let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
+        let (_id, obkv) = docs
+            .iter()
+            .find(|(_id, kv)| {
+                if let Some(bytes) = kv.get(0) {
+                    let object = bumpalo_json::deserialize_bincode_slice(bytes, &bump).unwrap();
+                    matches!(object, bumpalo_json::Value::String("kevin"))
+                } else {
+                    false
+                }
+            })
+            .unwrap();
+        let kevin_uuid =
+            match bumpalo_json::deserialize_bincode_slice(&obkv.get(1).unwrap(), &bump).unwrap() {
+                bumpalo_json::Value::String(s) => s,
+                _ => panic!(),
+            };
+        // let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
         drop(rtxn);
 
         // Second we send 1 document with the generated uuid, to erase the previous ones.
@@ -840,13 +856,13 @@ mod tests {
 
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
         let (kevin_id, _) =
-            docs.iter().find(|(_, d)| d.get(0).unwrap() == br#""updated kevin""#).unwrap();
+            docs.iter().find(|(_, d)| d.get(0).unwrap() == b"\x05\x0dupdated kevin").unwrap();
         let (id, doc) = docs[*kevin_id as usize];
         assert_eq!(id, *kevin_id);
 
         // Check that this document is equal to the last
         // one sent and that an UUID has been generated.
-        assert_eq!(doc.get(0), Some(&br#""updated kevin""#[..]));
+        assert_eq!(doc.get(0), Some(&b"\x05\x0dupdated kevin"[..]));
         // This is an UUID, it must be 36 bytes long plus the 2 surrounding string quotes (").
         assert_eq!(doc.get(1).unwrap().len(), 36 + 2);
         drop(rtxn);

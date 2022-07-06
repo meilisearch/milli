@@ -1,6 +1,7 @@
 use std::collections::btree_map::Entry;
 use std::collections::HashMap;
 
+use bumpalo::Bump;
 use fst::IntoStreamer;
 use heed::types::{ByteSlice, Str};
 use heed::{BytesDecode, BytesEncode, Database};
@@ -10,6 +11,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::ClearDocuments;
+use crate::documents::bumpalo_json;
 use crate::error::{InternalError, SerializationError, UserError};
 use crate::heed_codec::facet::{
     FacetLevelValueU32Codec, FacetStringLevelZeroValueCodec, FacetStringZeroBoundsValueCodec,
@@ -133,6 +135,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
         // Retrieve the words and the external documents ids contained in the documents.
         let mut words = Vec::new();
         let mut external_ids = Vec::new();
+        let bump = Bump::new();
         for docid in &self.documents_ids {
             // We create an iterator to be able to get the content and delete the document
             // content itself. It's faster to acquire a cursor to get and delete,
@@ -145,13 +148,30 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
                 }
 
                 if let Some(content) = obkv.get(id_field) {
-                    let external_id = match serde_json::from_slice(content).unwrap() {
-                        Value::String(string) => SmallString32::from(string.as_str()),
-                        Value::Number(number) => SmallString32::from(number.to_string()),
-                        document_id => {
-                            return Err(UserError::InvalidDocumentId { document_id }.into())
-                        }
-                    };
+                    let external_id =
+                        match crate::documents::bumpalo_json::deserialize_bincode_slice(
+                            content, &bump,
+                        )
+                        .unwrap()
+                        {
+                            bumpalo_json::Value::String(string) => SmallString32::from(string),
+                            bumpalo_json::Value::SignedInteger(number) => {
+                                SmallString32::from(number.to_string())
+                            }
+                            bumpalo_json::Value::UnsignedInteger(number) => {
+                                SmallString32::from(number.to_string())
+                            }
+                            bumpalo_json::Value::Float(number) => {
+                                SmallString32::from(number.to_string())
+                            }
+                            document_id => {
+                                return Err(UserError::InvalidDocumentId {
+                                    document_id: (bump.alloc(document_id) as &bumpalo_json::Value)
+                                        .into(),
+                                }
+                                .into())
+                            }
+                        };
                     external_ids.push(external_id);
                 }
                 // safety: we don't keep references from inside the LMDB database.

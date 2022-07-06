@@ -1,9 +1,11 @@
+use std::io::BufRead;
+
 use bumpalo::collections::vec::Vec as BumpVec;
 use bumpalo::Bump;
 use serde::{
-    de::{DeserializeSeed, Visitor},
+    de::{DeserializeSeed, VariantAccess, Visitor},
     ser::{SerializeMap, SerializeSeq},
-    Deserializer, Serialize,
+    Deserialize, Deserializer, Serialize,
 };
 use serde_json::Number;
 
@@ -58,6 +60,46 @@ impl<'bump> Map<'bump> {
         }
     }
 }
+impl<'bump> Value<'bump> {
+    pub fn from(j: &serde_json::Value, bump: &'bump Bump) -> Self {
+        match j {
+            serde_json::Value::Null => Self::Null,
+            serde_json::Value::Bool(x) => Self::Bool(*x),
+            serde_json::Value::Number(x) => {
+                if let Some(x) = x.as_u64() {
+                    Self::UnsignedInteger(x)
+                } else if let Some(x) = x.as_i64() {
+                    Self::SignedInteger(x)
+                } else if let Some(x) = x.as_f64() {
+                    Self::Float(x)
+                } else {
+                    panic!()
+                }
+            }
+            serde_json::Value::String(x) => Self::String(bump.alloc_str(x.as_str())),
+            serde_json::Value::Array(x) => {
+                let mut vec = BumpVec::new_in(bump);
+                for x in x {
+                    vec.push(MaybeMut::Ref(bump.alloc(Value::from(x, bump))));
+                }
+                Self::Sequence(vec)
+            }
+            serde_json::Value::Object(x) => Self::Map(Map::from(x, bump)),
+        }
+    }
+}
+impl<'bump> Map<'bump> {
+    pub fn from(obj: &crate::Object, bump: &'bump Bump) -> Self {
+        let mut map = BumpVec::new_in(bump);
+        for (key, v) in obj {
+            map.push((
+                bump.alloc_str(key.as_str()) as &_,
+                MaybeMut::Ref(bump.alloc(Value::from(v, bump))),
+            ));
+        }
+        Map(map)
+    }
+}
 
 // pub type Map<'bump> = BumpVec<'bump, (&'bump str, MaybeMut<'bump, Value<'bump>>)>;
 pub type Seq<'bump> = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
@@ -92,21 +134,39 @@ impl<'bump> Serialize for Value<'bump> {
         S: serde::Serializer,
     {
         match self {
-            Value::Null => serializer.serialize_none(),
-            Value::Bool(x) => serializer.serialize_bool(*x),
-            Value::SignedInteger(x) => serializer.serialize_i64(*x),
-            Value::UnsignedInteger(x) => serializer.serialize_u64(*x),
-            Value::Float(x) => serializer.serialize_f64(*x),
-            Value::String(s) => serializer.serialize_str(s),
-            Value::Sequence(xs) => {
-                let mut seqser = serializer.serialize_seq(Some(xs.len()))?;
-                for x in xs {
-                    seqser.serialize_element(x.as_ref())?;
-                }
-                seqser.end()
+            Value::Null => serializer.serialize_unit_variant("Value", 0, "Null"),
+            Value::Bool(x) => serializer.serialize_newtype_variant("Value", 1, "Bool", x),
+            Value::SignedInteger(x) => {
+                serializer.serialize_newtype_variant("Value", 2, "SignedInteger", x)
             }
-            Value::Map(kvs) => kvs.serialize(serializer),
+            Value::UnsignedInteger(x) => {
+                serializer.serialize_newtype_variant("Value", 3, "UnsignedInteger", x)
+            }
+            Value::Float(x) => serializer.serialize_newtype_variant("Value", 4, "Float", x),
+            Value::String(x) => serializer.serialize_newtype_variant("Value", 5, "String", x),
+            Value::Sequence(x) => serializer.serialize_newtype_variant(
+                "Value",
+                6,
+                "Sequence",
+                &SerializableSequence(x),
+            ),
+            Value::Map(x) => serializer.serialize_newtype_variant("Value", 7, "Map", x),
         }
+    }
+}
+struct SerializableSequence<'a, 'bump>(&'a Seq<'bump>);
+
+impl<'a, 'bump> Serialize for SerializableSequence<'a, 'bump> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seqser = serializer.serialize_seq(Some(self.0.len()))?;
+        for x in self.0.iter() {
+            let x = x.as_ref();
+            seqser.serialize_element(x)?;
+        }
+        seqser.end()
     }
 }
 
@@ -166,54 +226,169 @@ impl<'bump, T> MaybeMut<'bump, T> {
 }
 
 #[derive(Clone, Copy)]
-pub struct JsonValueBumpSeed<'bump> {
+pub struct ValueEnumBumpSeed<'bump> {
     pub bump: &'bump Bump,
 }
 
-impl<'de, 'bump> DeserializeSeed<'de> for JsonValueBumpSeed<'bump> {
+impl<'de, 'bump> DeserializeSeed<'de> for ValueEnumBumpSeed<'bump> {
     type Value = Value<'bump>;
 
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let visitor = JsonVisitor { bump: &self.bump };
+        let visitor = ValueVisitor { bump: &self.bump };
+        let value = deserializer.deserialize_enum(
+            "Value",
+            &[
+                "Null",
+                "Bool",
+                "SignedInteger",
+                "UnsignedInteger",
+                "Float",
+                "String",
+                "Sequence",
+                "Map",
+            ],
+            visitor,
+        )?;
+        Ok(value)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ValueJsonBumpSeed<'bump> {
+    pub bump: &'bump Bump,
+}
+
+impl<'de, 'bump> DeserializeSeed<'de> for ValueJsonBumpSeed<'bump> {
+    type Value = Value<'bump>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let visitor = ValueVisitor { bump: &self.bump };
         let value = deserializer.deserialize_any(visitor)?;
         Ok(value)
     }
 }
 
-struct JsonVisitor<'bump> {
+struct ValueVisitor<'bump> {
     bump: &'bump Bump,
 }
 
-impl<'de, 'bump> Visitor<'de> for JsonVisitor<'bump> {
+enum ValueKind {
+    Null,
+    Bool,
+    SignedInteger,
+    UnsignedInteger,
+    Float,
+    String,
+    Sequence,
+    Map,
+}
+struct ValueKindVisitor;
+impl<'de> Visitor<'de> for ValueKindVisitor {
+    type Value = ValueKind;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "variant identifier")
+    }
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        match v {
+            0 => Ok(ValueKind::Null),
+            1 => Ok(ValueKind::Bool),
+            2 => Ok(ValueKind::SignedInteger),
+            3 => Ok(ValueKind::UnsignedInteger),
+            4 => Ok(ValueKind::Float),
+            5 => Ok(ValueKind::String),
+            6 => Ok(ValueKind::Sequence),
+            7 => Ok(ValueKind::Map),
+            x => Err(E::invalid_value(
+                serde::de::Unexpected::Unsigned(x),
+                &"variant index 0 <= i < 8",
+            )),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for ValueKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_identifier(ValueKindVisitor)
+    }
+}
+
+impl<'de, 'bump> Visitor<'de> for ValueVisitor<'bump> {
     type Value = Value<'bump>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(formatter, "a valid Json value")
     }
 
-    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
     where
-        E: serde::de::Error,
+        A: serde::de::EnumAccess<'de>,
     {
-        Ok(Value::Null)
+        let (kind, variant) = data.variant::<ValueKind>()?;
+        match kind {
+            ValueKind::Null => {
+                variant.unit_variant()?;
+                Ok(Value::Null)
+            }
+            ValueKind::Bool => {
+                let x = variant.newtype_variant::<bool>()?;
+                Ok(Value::Bool(x))
+            }
+            ValueKind::SignedInteger => {
+                let x = variant.newtype_variant::<i64>()?;
+                Ok(Value::SignedInteger(x))
+            }
+            ValueKind::UnsignedInteger => {
+                let x = variant.newtype_variant::<u64>()?;
+                Ok(Value::UnsignedInteger(x))
+            }
+            ValueKind::Float => {
+                let x = variant.newtype_variant::<f64>()?;
+                Ok(Value::Float(x))
+            }
+            ValueKind::String => {
+                let x = variant.newtype_variant_seed(StringBumpSeed { bump: &self.bump })?;
+                Ok(Value::String(x))
+            }
+            ValueKind::Sequence => {
+                let x = variant.newtype_variant_seed(JsonSeqVisitor { bump: &self.bump })?;
+                Ok(Value::Sequence(x))
+            }
+            ValueKind::Map => {
+                let x = variant.newtype_variant_seed(MapEnumVisitor { bump: &self.bump })?;
+                Ok(Value::Map(x))
+            }
+        }
     }
+
     fn visit_none<E>(self) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         Ok(Value::Null)
     }
-
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(Value::Null)
+    }
     fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         Ok(Value::Bool(v))
     }
-
     fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
@@ -240,7 +415,6 @@ impl<'de, 'bump> Visitor<'de> for JsonVisitor<'bump> {
         E: serde::de::Error,
     {
         let s: &'bump str = self.bump.alloc_str(v);
-        let s: &'bump &'bump str = self.bump.alloc(s);
         Ok(Value::String(s))
     }
 
@@ -248,7 +422,7 @@ impl<'de, 'bump> Visitor<'de> for JsonVisitor<'bump> {
     where
         A: serde::de::SeqAccess<'de>,
     {
-        let seed = JsonValueBumpSeed { bump: &self.bump };
+        let seed = ValueJsonBumpSeed { bump: &self.bump };
         let mut vector = BumpVec::with_capacity_in(16, &self.bump);
         while let Some(value) = seq.next_element_seed(seed)? {
             vector.push(MaybeMut::Ref(self.bump.alloc(value)));
@@ -260,7 +434,7 @@ impl<'de, 'bump> Visitor<'de> for JsonVisitor<'bump> {
         A: serde::de::MapAccess<'de>,
     {
         let key_seed = StringBumpSeed { bump: &self.bump };
-        let value_seed = JsonValueBumpSeed { bump: &self.bump };
+        let value_seed = ValueJsonBumpSeed { bump: &self.bump };
         let mut vector = BumpVec::with_capacity_in(16, &self.bump);
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
@@ -269,10 +443,42 @@ impl<'de, 'bump> Visitor<'de> for JsonVisitor<'bump> {
     }
 }
 
-struct JsonMapVisitor<'bump> {
+struct JsonSeqVisitor<'bump> {
     bump: &'bump Bump,
 }
-impl<'de, 'bump> Visitor<'de> for JsonMapVisitor<'bump> {
+impl<'de, 'bump> Visitor<'de> for JsonSeqVisitor<'bump> {
+    type Value = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "a valid Json array")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let seed = ValueEnumBumpSeed { bump: &self.bump };
+        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        while let Some(value) = seq.next_element_seed(seed)? {
+            vector.push(MaybeMut::Ref(self.bump.alloc(value)));
+        }
+        Ok(vector)
+    }
+}
+impl<'bump, 'de> DeserializeSeed<'de> for JsonSeqVisitor<'bump> {
+    type Value = BumpVec<'bump, MaybeMut<'bump, Value<'bump>>>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(self)
+    }
+}
+struct MapEnumVisitor<'bump> {
+    bump: &'bump Bump,
+}
+impl<'de, 'bump> Visitor<'de> for MapEnumVisitor<'bump> {
     type Value = Map<'bump>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -284,7 +490,7 @@ impl<'de, 'bump> Visitor<'de> for JsonMapVisitor<'bump> {
         A: serde::de::MapAccess<'de>,
     {
         let key_seed = StringBumpSeed { bump: &self.bump };
-        let value_seed = JsonValueBumpSeed { bump: &self.bump };
+        let value_seed = ValueEnumBumpSeed { bump: &self.bump };
         let mut vector = BumpVec::with_capacity_in(16, &self.bump);
         while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
             vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
@@ -292,67 +498,106 @@ impl<'de, 'bump> Visitor<'de> for JsonMapVisitor<'bump> {
         Ok(Map(vector))
     }
 }
+impl<'bump, 'de> DeserializeSeed<'de> for MapEnumVisitor<'bump> {
+    type Value = Map<'bump>;
 
-pub fn deserialize_map<'r, 'bump>(
-    reader: impl serde_json::de::Read<'r>,
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(self)
+    }
+}
+
+pub struct MapJsonVisitor<'bump> {
+    pub bump: &'bump Bump,
+}
+impl<'de, 'bump> Visitor<'de> for MapJsonVisitor<'bump> {
+    type Value = Map<'bump>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(formatter, "a valid Json object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::MapAccess<'de>,
+    {
+        let key_seed = StringBumpSeed { bump: &self.bump };
+        let value_seed = ValueJsonBumpSeed { bump: &self.bump };
+        let mut vector = BumpVec::with_capacity_in(16, &self.bump);
+        while let Some((key, value)) = map.next_entry_seed(key_seed, value_seed)? {
+            vector.push((key, MaybeMut::Ref(self.bump.alloc(value))));
+        }
+        Ok(Map(vector))
+    }
+}
+impl<'bump, 'de> DeserializeSeed<'de> for MapJsonVisitor<'bump> {
+    type Value = Map<'bump>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(self)
+    }
+}
+
+pub fn deserialize_map<'bump>(
+    reader: impl BufRead,
     bump: &'bump Bump,
-) -> Result<Map<'bump>, serde_json::Error> {
-    let mut de = serde_json::de::Deserializer::new(reader);
-    let visitor = JsonMapVisitor { bump };
-    de.deserialize_any(visitor)
+) -> Result<Map<'bump>, bincode::Error> {
+    let mut de = bincode::Deserializer::with_reader(reader, bincode::DefaultOptions::default());
+    let visitor = MapEnumVisitor { bump };
+
+    de.deserialize_map(visitor)
 }
 
 pub fn deserialize_map_slice<'r, 'bump>(
     s: &'r [u8],
     bump: &'bump Bump,
-) -> Result<Map<'bump>, serde_json::Error> {
-    let reader = serde_json::de::SliceRead::new(s);
-    let mut de = serde_json::de::Deserializer::new(reader);
-    let visitor = JsonMapVisitor { bump };
-    de.deserialize_any(visitor)
+) -> Result<Map<'bump>, bincode::Error> {
+    let mut de = bincode::Deserializer::from_slice(s, bincode::DefaultOptions::default());
+    let visitor = MapEnumVisitor { bump };
+    de.deserialize_map(visitor)
 }
 
-pub fn deserialize_bump_json<'r, 'bump>(
-    reader: impl serde_json::de::Read<'r>,
-    bump: &'bump Bump,
-) -> Result<Value<'bump>, serde_json::Error> {
-    let mut de = serde_json::de::Deserializer::new(reader);
-    let visitor = JsonVisitor { bump };
-    de.deserialize_any(visitor)
-}
-
-pub fn deserialize_json_str<'s, 'bump>(
-    s: &'s str,
-    bump: &'bump Bump,
-) -> Result<Value<'bump>, serde_json::Error> {
-    let reader = serde_json::de::StrRead::new(s);
-    let mut de = serde_json::de::Deserializer::new(reader);
-    let visitor = JsonVisitor { bump };
-    de.deserialize_any(visitor)
-}
-
-pub fn deserialize_json_slice<'s, 'bump>(
+pub fn deserialize_bincode_slice<'s, 'bump>(
     s: &'s [u8],
     bump: &'bump Bump,
-) -> Result<Value<'bump>, serde_json::Error> {
-    let reader = serde_json::de::SliceRead::new(s);
-    let mut de = serde_json::de::Deserializer::new(reader);
-    let visitor = JsonVisitor { bump };
-    de.deserialize_any(visitor)
+) -> Result<Value<'bump>, bincode::Error> {
+    let mut de = bincode::Deserializer::from_slice(s, bincode::DefaultOptions::default());
+
+    ValueEnumBumpSeed { bump }.deserialize(&mut de)
 }
 
-pub fn serialize_json<'bump, W>(j: &Value<'bump>, writer: W) -> Result<(), serde_json::Error>
+// pub fn serialize_json<'bump, W>(j: &Value<'bump>, writer: W) -> Result<(), serde_json::Error>
+// where
+//     W: std::io::Write,
+// {
+//     let mut serializer = serde_json::ser::Serializer::new(writer);
+//     j.serialize(&mut serializer)
+// }
+// pub fn serialize_map<'bump, W>(j: &Map<'bump>, writer: W) -> Result<(), serde_json::Error>
+// where
+//     W: std::io::Write,
+// {
+//     let mut serializer = serde_json::ser::Serializer::new(writer);
+//     j.serialize(&mut serializer)
+// }
+
+pub fn serialize_bincode<'bump, W>(j: &Value<'bump>, writer: W) -> Result<(), bincode::Error>
 where
     W: std::io::Write,
 {
-    let mut serializer = serde_json::ser::Serializer::new(writer);
+    let mut serializer = bincode::Serializer::new(writer, bincode::DefaultOptions::default());
     j.serialize(&mut serializer)
 }
-pub fn serialize_map<'bump, W>(j: &Map<'bump>, writer: W) -> Result<(), serde_json::Error>
+pub fn serialize_map<'bump, W>(j: &Map<'bump>, writer: W) -> Result<(), bincode::Error>
 where
     W: std::io::Write,
 {
-    let mut serializer = serde_json::ser::Serializer::new(writer);
+    let mut serializer = bincode::Serializer::new(writer, bincode::DefaultOptions::default());
     j.serialize(&mut serializer)
 }
 
@@ -514,6 +759,25 @@ mod tests {
     use bumpalo::Bump;
     use std::mem::size_of;
 
+    fn deserialize_bump_json<'r, 'bump>(
+        reader: impl serde_json::de::Read<'r>,
+        bump: &'bump Bump,
+    ) -> Result<Value<'bump>, serde_json::Error> {
+        let mut de = serde_json::de::Deserializer::new(reader);
+
+        ValueEnumBumpSeed { bump }.deserialize(&mut de)
+    }
+
+    fn deserialize_json_str<'s, 'bump>(
+        s: &'s str,
+        bump: &'bump Bump,
+    ) -> Result<Value<'bump>, serde_json::Error> {
+        let reader = serde_json::de::StrRead::new(s);
+        let mut de = serde_json::de::Deserializer::new(reader);
+
+        ValueEnumBumpSeed { bump }.deserialize(&mut de)
+    }
+
     #[test]
     fn size_types() {
         let size = size_of::<Value<'_>>();
@@ -526,7 +790,7 @@ mod tests {
     #[test]
     fn deser() {
         let bump = Bump::new();
-        let s = r#"{
+        let j = serde_json::json!({
             "a.b": [1, 2],
             "a.b": "k",
             "a": {
@@ -535,12 +799,10 @@ mod tests {
                 "f": "g",
                 "b": "h"
             }
-        }"#;
-        let j = deserialize_json_str(s, &bump).unwrap();
-        let j = match j {
-            Value::Map(kvs) => kvs,
-            _ => panic!(),
-        };
+        });
+        let j = j.as_object().unwrap();
+        let j = Map::from(j, &bump);
+
         let f = flatten(bump.alloc(j), &bump);
         let f = std::mem::replace(&mut f.0, BumpVec::with_capacity_in(0, &bump));
         println!("{}", Value::Map(Map(f)));

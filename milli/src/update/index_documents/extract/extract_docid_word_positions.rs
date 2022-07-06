@@ -3,11 +3,13 @@ use std::convert::TryInto;
 use std::fs::File;
 use std::{io, mem, str};
 
+use bumpalo::Bump;
 use charabia::{SeparatorKind, Token, TokenKind, TokenizerBuilder};
 use roaring::RoaringBitmap;
 use serde_json::Value;
 
 use super::helpers::{concat_u32s_array, create_sorter, sorter_into_reader, GrenadParameters};
+use crate::documents::bumpalo_json;
 use crate::error::{InternalError, SerializationError};
 use crate::{absolute_from_relative_position, FieldId, Result, MAX_POSITION_PER_ATTRIBUTE};
 
@@ -46,7 +48,10 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
     let tokenizer = builder.build();
 
     let mut cursor = obkv_documents.into_cursor()?;
+    let mut bump = bumpalo::Bump::new();
+
     while let Some((key, value)) = cursor.move_on_next()? {
+        bump.reset();
         let document_id = key
             .try_into()
             .map(u32::from_be_bytes)
@@ -59,10 +64,13 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
 
         for (field_id, field_bytes) in obkv.iter() {
             if searchable_fields.as_ref().map_or(true, |sf| sf.contains(&field_id)) {
-                let value =
-                    serde_json::from_slice(field_bytes).map_err(InternalError::SerdeJson)?;
+                let value: &_ = bump.alloc(
+                    bumpalo_json::deserialize_bincode_slice(field_bytes, &bump)
+                        .map_err(InternalError::Bincode)?,
+                );
+
                 field_buffer.clear();
-                if let Some(field) = json_to_string(&value, &mut field_buffer) {
+                if let Some(field) = bincode_to_string(value, &bump) {
                     let tokens = process_tokens(tokenizer.tokenize(field))
                         .take_while(|(p, _)| (*p as u32) < max_positions_per_attributes);
 
@@ -89,18 +97,28 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
 }
 
 /// Transform a JSON value into a string that can be indexed.
-fn json_to_string<'a>(value: &'a Value, buffer: &'a mut String) -> Option<&'a str> {
-    fn inner(value: &Value, output: &mut String) -> bool {
+fn bincode_to_string<'bump>(
+    value: &'bump bumpalo_json::Value<'bump>,
+    bump: &'bump Bump,
+) -> Option<&'bump str> {
+    fn inner<'bump>(
+        value: &'bump bumpalo_json::Value<'bump>,
+        output: &mut bumpalo::collections::string::String,
+        bump: &'bump Bump,
+    ) -> bool {
         use std::fmt::Write;
         match value {
-            Value::Null => false,
-            Value::Bool(boolean) => write!(output, "{}", boolean).is_ok(),
-            Value::Number(number) => write!(output, "{}", number).is_ok(),
-            Value::String(string) => write!(output, "{}", string).is_ok(),
-            Value::Array(array) => {
+            bumpalo_json::Value::Null => false,
+            bumpalo_json::Value::Bool(x) => write!(output, "{}", x).is_ok(),
+            bumpalo_json::Value::SignedInteger(x) => write!(output, "{}", x).is_ok(),
+            bumpalo_json::Value::UnsignedInteger(x) => write!(output, "{}", x).is_ok(),
+            bumpalo_json::Value::Float(x) => write!(output, "{}", x).is_ok(),
+            bumpalo_json::Value::String(x) => write!(output, "{}", x).is_ok(),
+            bumpalo_json::Value::Sequence(array) => {
                 let mut count = 0;
                 for value in array {
-                    if inner(value, output) {
+                    let value = value.as_ref();
+                    if inner(value, output, bump) {
                         output.push_str(". ");
                         count += 1;
                     }
@@ -108,13 +126,14 @@ fn json_to_string<'a>(value: &'a Value, buffer: &'a mut String) -> Option<&'a st
                 // check that at least one value was written
                 count != 0
             }
-            Value::Object(object) => {
-                let mut buffer = String::new();
+            bumpalo_json::Value::Map(map) => {
+                let mut buffer = bumpalo::collections::string::String::new_in(bump);
                 let mut count = 0;
-                for (key, value) in object {
+                for (key, value) in map.0.iter() {
+                    let value = value.as_ref();
                     buffer.clear();
                     let _ = write!(&mut buffer, "{}: ", key);
-                    if inner(value, &mut buffer) {
+                    if inner(value, &mut buffer, bump) {
                         buffer.push_str(". ");
                         // We write the "key: value. " pair only when
                         // we are sure that the value can be written.
@@ -128,12 +147,15 @@ fn json_to_string<'a>(value: &'a Value, buffer: &'a mut String) -> Option<&'a st
         }
     }
 
-    if let Value::String(string) = value {
+    if let bumpalo_json::Value::String(string) = value {
         Some(&string)
-    } else if inner(value, buffer) {
-        Some(buffer)
     } else {
-        None
+        let mut buffer = bumpalo::collections::string::String::new_in(bump);
+        if inner(value, &mut buffer, bump) {
+            Some(buffer.into_bump_str())
+        } else {
+            None
+        }
     }
 }
 

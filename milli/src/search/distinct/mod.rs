@@ -29,13 +29,14 @@ mod test {
     use std::collections::HashSet;
     use std::io::Cursor;
 
+    use bumpalo::Bump;
     use once_cell::sync::Lazy;
     use rand::seq::SliceRandom;
     use rand::Rng;
     use roaring::RoaringBitmap;
     use serde_json::{json, Value};
 
-    use crate::documents::{DocumentsBatchBuilder, DocumentsBatchReader};
+    use crate::documents::{bumpalo_json, DocumentsBatchBuilder, DocumentsBatchReader};
     use crate::index::tests::TempIndex;
     use crate::index::Index;
     use crate::update::{
@@ -125,17 +126,18 @@ mod test {
         distinct: FieldId,
         index: &Index,
     ) -> usize {
-        fn test(seen: &mut HashSet<String>, value: &Value) {
+        fn test(seen: &mut HashSet<String>, value: &bumpalo_json::Value) {
             match value {
-                Value::Null | Value::Object(_) | Value::Bool(_) => (),
-                Value::Number(_) | Value::String(_) => {
+                bumpalo_json::Value::Sequence(values) => {
+                    values.into_iter().for_each(|value| test(seen, value.as_ref()))
+                }
+                value => {
                     let s = value.to_string();
                     assert!(seen.insert(s));
                 }
-                Value::Array(values) => values.into_iter().for_each(|value| test(seen, value)),
             }
         }
-
+        let bump = Bump::new();
         let mut seen = HashSet::<String>::new();
 
         let txn = index.read_txn().unwrap();
@@ -146,7 +148,8 @@ mod test {
             let id = BEU32::new(candidate);
             let document = index.documents.get(&txn, &id).unwrap().unwrap();
             let value = document.get(distinct).unwrap();
-            let value = serde_json::from_slice(value).unwrap();
+            let value = bumpalo_json::deserialize_bincode_slice(value, &bump).unwrap();
+            // let value = serde_json::from_slice(value).unwrap();
             test(&mut seen, &value);
         }
         count

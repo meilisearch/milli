@@ -63,17 +63,17 @@ impl<R> DocumentsBatchCursor<R> {
 }
 
 impl<R: io::Read + io::Seek> DocumentsBatchCursor<R> {
-    /// Returns the next document, starting from the first one. Subsequent calls to
-    /// `next_document` advance the document reader until all the documents have been read.
-    pub fn next_document(&mut self) -> Result<Option<Object>, DocumentsBatchCursorError> {
-        match self.cursor.move_on_next()? {
-            Some((_, value)) => {
-                let json = serde_json::from_slice(value)?;
-                Ok(Some(json))
-            }
-            None => Ok(None),
-        }
-    }
+    // /// Returns the next document, starting from the first one. Subsequent calls to
+    // /// `next_document` advance the document reader until all the documents have been read.
+    // pub fn next_document(&mut self) -> Result<Option<Object>, DocumentsBatchCursorError> {
+    //     match self.cursor.move_on_next()? {
+    //         Some((_, value)) => {
+    //             let json = bincode::deserialize(value)?;
+    //             Ok(Some(json))
+    //         }
+    //         None => Ok(None),
+    //     }
+    // }
 
     pub fn next_bump_document<'bump>(
         &mut self,
@@ -81,11 +81,8 @@ impl<R: io::Read + io::Seek> DocumentsBatchCursor<R> {
     ) -> Result<Option<Map<'bump>>, DocumentsBatchCursorError> {
         match self.cursor.move_on_next()? {
             Some((_, value)) => {
-                let json = bumpalo_json::deserialize_json_slice(value, bump)?;
-                match json {
-                    bumpalo_json::Value::Map(map) => Ok(Some(map)),
-                    _ => panic!(),
-                }
+                let json = bumpalo_json::deserialize_map(value, bump)?;
+                Ok(Some(json))
             }
             None => Ok(None),
         }
@@ -97,6 +94,7 @@ impl<R: io::Read + io::Seek> DocumentsBatchCursor<R> {
 pub enum DocumentsBatchCursorError {
     Grenad(grenad::Error),
     SerdeJson(serde_json::Error),
+    Bincode(bincode::Error),
 }
 
 impl From<grenad::Error> for DocumentsBatchCursorError {
@@ -110,6 +108,11 @@ impl From<serde_json::Error> for DocumentsBatchCursorError {
         DocumentsBatchCursorError::SerdeJson(error)
     }
 }
+impl From<bincode::Error> for DocumentsBatchCursorError {
+    fn from(error: bincode::Error) -> DocumentsBatchCursorError {
+        DocumentsBatchCursorError::Bincode(error)
+    }
+}
 
 impl error::Error for DocumentsBatchCursorError {}
 
@@ -118,6 +121,7 @@ impl fmt::Display for DocumentsBatchCursorError {
         match self {
             DocumentsBatchCursorError::Grenad(e) => e.fmt(f),
             DocumentsBatchCursorError::SerdeJson(e) => e.fmt(f),
+            DocumentsBatchCursorError::Bincode(e) => e.fmt(f),
         }
     }
 }

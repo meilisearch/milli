@@ -3,14 +3,14 @@ use std::io::Write;
 
 use bumpalo::Bump;
 use grenad::{CompressionType, WriterBuilder};
-use serde::de::Deserializer;
+use serde::{de::Deserializer, Serialize};
 use serde_json::{Number, Value};
 
 use crate::documents::document_visitor::DocumentVisitor;
 use crate::documents::Error;
 use crate::Object;
 
-use super::bumpalo_json::Map;
+use super::bumpalo_json::{self, Map};
 /// The `DocumentsBatchBuilder` provides a way to build a documents batch in the intermediary
 /// format used by milli.
 ///
@@ -86,7 +86,7 @@ impl<W: Write> DocumentsBatchBuilder<W> {
     pub fn append_bump_json_object<'bump>(&mut self, object: &Map<'bump>) -> Result<(), Error> {
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
-        serde_json::to_writer(&mut self.value_buffer, object)?;
+        bumpalo_json::serialize_map(object, &mut self.value_buffer)?;
         self.writer.insert(internal_id, &self.value_buffer)?;
         self.documents_count += 1;
         Ok(())
@@ -94,9 +94,13 @@ impl<W: Write> DocumentsBatchBuilder<W> {
 
     /// Appends a new JSON object into the batch
     pub fn append_json_object(&mut self, object: &Object) -> Result<(), Error> {
+        let bump = Bump::new();
+        let object = bumpalo_json::Map::from(object, &bump);
         self.value_buffer.clear();
         let internal_id = self.documents_count.to_be_bytes();
-        serde_json::to_writer(&mut self.value_buffer, object)?;
+        let mut serializer =
+            bincode::Serializer::new(&mut self.value_buffer, bincode::DefaultOptions::default());
+        object.serialize(&mut serializer)?;
         self.writer.insert(internal_id, &self.value_buffer)?;
         self.documents_count += 1;
         Ok(())
@@ -142,7 +146,9 @@ impl<W: Write> DocumentsBatchBuilder<W> {
         let mut record = csv::StringRecord::new();
         let mut line = 0;
 
+        let mut bump = Bump::new();
         while reader.read_record(&mut record)? {
+            bump.reset();
             // We increment here and not at the end of the while loop to take
             // the header offset into account.
             line += 1;
@@ -190,7 +196,13 @@ impl<W: Write> DocumentsBatchBuilder<W> {
 
             let internal_id = self.documents_count.to_be_bytes();
             self.value_buffer.clear();
-            serde_json::to_writer(&mut self.value_buffer, &object)?;
+            let mut serializer = bincode::Serializer::new(
+                &mut self.value_buffer,
+                bincode::DefaultOptions::default(),
+            );
+            let bump_object = bumpalo_json::Map::from(&object, &bump);
+            bump_object.serialize(&mut serializer)?;
+
             self.writer.insert(internal_id, &self.value_buffer)?;
             string_allocs.reclaim_from_object(&mut object);
             self.documents_count += 1;
@@ -235,6 +247,7 @@ mod test {
 
     #[test]
     fn add_single_documents_json() {
+        let bump = Bump::new();
         let json = serde_json::json!({
             "id": 1,
             "field": "hello!",
@@ -257,17 +270,21 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let document = cursor.next_document().unwrap().unwrap();
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(document.iter().count(), 2);
 
-        let document = cursor.next_document().unwrap().unwrap();
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
+
         assert_eq!(document.iter().count(), 3);
 
-        assert!(cursor.next_document().unwrap().is_none());
+        assert!(cursor.next_bump_document(&bump).unwrap().is_none());
     }
 
     #[test]
     fn add_documents_csv() {
+        let bump = Bump::new();
         let csv_content = "id:number,field:string\n1,hello!\n2,blabla";
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
 
@@ -279,17 +296,20 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let document = cursor.next_document().unwrap().unwrap();
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(document.iter().count(), 2);
 
-        let document = cursor.next_document().unwrap().unwrap();
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(document.iter().count(), 2);
 
-        assert!(cursor.next_document().unwrap().is_none());
+        assert!(cursor.next_bump_document(&bump).unwrap().is_none());
     }
 
     #[test]
     fn simple_csv_document() {
+        let bump = Bump::new();
         let csv_content = r#"city,country,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -300,7 +320,8 @@ mod test {
 
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
-        let doc = cursor.next_document().unwrap().unwrap();
+        let doc: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let doc: crate::Object = doc.into();
 
         assert_eq!(
             &doc,
@@ -313,11 +334,12 @@ mod test {
             .unwrap(),
         );
 
-        assert!(cursor.next_document().unwrap().is_none());
+        assert!(cursor.next_bump_document(&bump).unwrap().is_none());
     }
 
     #[test]
     fn coma_in_field() {
+        let bump = Bump::new();
         let csv_content = r#"city,country,pop
 "Boston","United, States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -329,7 +351,8 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
+        let doc: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let doc: crate::Object = doc.into();
 
         assert_eq!(
             &doc,
@@ -345,6 +368,7 @@ mod test {
 
     #[test]
     fn quote_in_field() {
+        let bump = Bump::new();
         let csv_content = r#"city,country,pop
 "Boston","United"" States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -356,10 +380,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city": "Boston",
                 "country": "United\" States",
@@ -372,6 +396,7 @@ mod test {
 
     #[test]
     fn integer_in_field() {
+        let bump = Bump::new();
         let csv_content = r#"city,country,pop:number
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -382,9 +407,10 @@ mod test {
 
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
-        let doc = cursor.next_document().unwrap().unwrap();
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city": "Boston",
                 "country": "United States",
@@ -397,6 +423,7 @@ mod test {
 
     #[test]
     fn float_in_field() {
+        let bump = Bump::new();
         let csv_content = r#"city,country,pop:number
 "Boston","United States","4628910.01""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -408,10 +435,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city": "Boston",
                 "country": "United States",
@@ -424,6 +451,7 @@ mod test {
 
     #[test]
     fn several_colon_in_header() {
+        let bump = Bump::new();
         let csv_content = r#"city:love:string,country:state,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -435,10 +463,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city:love": "Boston",
                 "country:state": "United States",
@@ -451,6 +479,7 @@ mod test {
 
     #[test]
     fn ending_by_colon_in_header() {
+        let bump = Bump::new();
         let csv_content = r#"city:,country,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -462,10 +491,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city:": "Boston",
                 "country": "United States",
@@ -478,6 +507,7 @@ mod test {
 
     #[test]
     fn starting_by_colon_in_header() {
+        let bump = Bump::new();
         let csv_content = r#":city,country,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -489,10 +519,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 ":city": "Boston",
                 "country": "United States",
@@ -506,6 +536,7 @@ mod test {
     #[ignore]
     #[test]
     fn starting_by_colon_in_header2() {
+        let bump = Bump::new();
         let csv_content = r#":string,country,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -517,11 +548,12 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        assert!(cursor.next_document().is_err());
+        assert!(cursor.next_bump_document(&bump).is_err());
     }
 
     #[test]
     fn double_colon_in_header() {
+        let bump = Bump::new();
         let csv_content = r#"city::string,country,pop
 "Boston","United States","4628910""#;
         let csv = csv::Reader::from_reader(Cursor::new(csv_content));
@@ -533,10 +565,10 @@ mod test {
         let mut cursor =
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
-        let doc = cursor.next_document().unwrap().unwrap();
-
+        let document: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let document: crate::Object = document.into();
         assert_eq!(
-            &doc,
+            &document,
             json!({
                 "city:": "Boston",
                 "country": "United States",

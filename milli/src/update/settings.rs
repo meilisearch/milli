@@ -708,11 +708,13 @@ impl<'a, 't, 'u, 'i> Settings<'a, 't, 'u, 'i> {
 #[cfg(test)]
 mod tests {
     use big_s::S;
+    use bumpalo::Bump;
     use heed::types::ByteSlice;
     use heed::EnvOpenOptions;
     use maplit::{btreeset, hashmap, hashset};
 
     use super::*;
+    use crate::documents::bumpalo_json;
     use crate::error::Error;
     use crate::index::tests::TempIndex;
     use crate::update::IndexDocuments;
@@ -762,7 +764,7 @@ mod tests {
         let result = index.search(&rtxn).query(r#""kevin""#).execute().unwrap();
         let documents = index.documents(&rtxn, result.documents_ids).unwrap();
         assert_eq!(documents.len(), 1);
-        assert_eq!(documents[0].1.get(0), Some(&br#""kevin""#[..]));
+        assert_eq!(documents[0].1.get(0), Some(&b"\x05\x05kevin"[..]));
         drop(rtxn);
 
         // We change the searchable fields to be the "name" field only.
@@ -779,7 +781,7 @@ mod tests {
         let result = index.search(&rtxn).query("23").execute().unwrap();
         assert_eq!(result.documents_ids.len(), 1);
         let documents = index.documents(&rtxn, result.documents_ids).unwrap();
-        assert_eq!(documents[0].1.get(0), Some(&br#""kevin""#[..]));
+        assert_eq!(documents[0].1.get(0), Some(&b"\x05\x05kevin"[..]));
     }
 
     #[test]
@@ -953,10 +955,16 @@ mod tests {
         // Only count the field_id 0 and level 0 facet values.
         // TODO we must support typed CSVs for numbers to be understood.
         let fidmap = index.fields_ids_map(&rtxn).unwrap();
+        let bump = Bump::new();
         for document in index.all_documents(&rtxn).unwrap() {
             let document = document.unwrap();
-            let json = crate::obkv_to_json(&fidmap.ids().collect::<Vec<_>>(), &fidmap, document.1)
-                .unwrap();
+            let json = crate::obkv_to_document(
+                &fidmap.ids().collect::<Vec<_>>(),
+                &fidmap,
+                document.1,
+                &bump,
+            )
+            .unwrap();
             println!("json: {:?}", json);
         }
         let count = index
@@ -1035,12 +1043,17 @@ mod tests {
         let SearchResult { documents_ids, .. } = index.search(&rtxn).execute().unwrap();
         let documents = index.documents(&rtxn, documents_ids).unwrap();
 
+        let bump = Bump::new();
         // Fetch the documents "age" field in the ordre in which the documents appear.
         let age_field_id = index.fields_ids_map(&rtxn).unwrap().id("age").unwrap();
         let iter = documents.into_iter().map(|(_, doc)| {
             let bytes = doc.get(age_field_id).unwrap();
-            let string = std::str::from_utf8(bytes).unwrap();
-            string.parse::<u32>().unwrap()
+            // let string = std::str::from_utf8(bytes).unwrap();
+            let value = bumpalo_json::deserialize_bincode_slice(bytes, &bump).unwrap();
+            match value {
+                bumpalo_json::Value::UnsignedInteger(x) => x,
+                _ => panic!(),
+            }
         });
 
         assert_eq!(iter.collect::<Vec<_>>(), vec![21, 23, 34]);
@@ -1482,7 +1495,7 @@ mod tests {
 
         let fid = index.fields_ids_map(&rtxn).unwrap().id("title").unwrap();
         let line = std::str::from_utf8(content.get(fid).unwrap()).unwrap();
-        assert_eq!(line, r#""Star Wars""#);
+        assert_eq!(line, "\x05\x09Star Wars");
     }
 
     #[test]

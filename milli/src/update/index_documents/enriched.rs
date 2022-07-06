@@ -2,6 +2,7 @@ use std::fs::File;
 use std::{fmt, io, str};
 
 use bumpalo::Bump;
+use serde::Deserialize;
 
 use crate::documents::{
     bumpalo_json, DocumentsBatchCursor, DocumentsBatchCursorError, DocumentsBatchReader,
@@ -77,22 +78,6 @@ impl<R> EnrichedDocumentsBatchCursor<R> {
 }
 
 impl<R: io::Read + io::Seek> EnrichedDocumentsBatchCursor<R> {
-    // /// Returns the next document, starting from the first one. Subsequent calls to
-    // /// `next_document` advance the document reader until all the documents have been read.
-    // pub fn next_enriched_document(
-    //     &mut self,
-    // ) -> Result<Option<EnrichedDocument>, DocumentsBatchCursorError> {
-    //     let document = self.documents.next_document()?;
-    //     let document_id = match self.external_ids.move_on_next()? {
-    //         Some((_, bytes)) => serde_json::from_slice(bytes).map(Some)?,
-    //         None => None,
-    //     };
-
-    //     match document.zip(document_id) {
-    //         Some((document, document_id)) => Ok(Some(EnrichedDocument { document, document_id })),
-    //         None => Ok(None),
-    //     }
-    // }
     /// Returns the next document, starting from the first one. Subsequent calls to
     /// `next_document` advance the document reader until all the documents have been read.
     pub fn next_enriched_bump_document<'bump>(
@@ -101,7 +86,12 @@ impl<R: io::Read + io::Seek> EnrichedDocumentsBatchCursor<R> {
     ) -> Result<Option<EnrichedBumpDocument<'bump>>, DocumentsBatchCursorError> {
         let document = self.documents.next_bump_document(bump)?;
         let document_id = match self.external_ids.move_on_next()? {
-            Some((_, bytes)) => serde_json::from_slice(bytes).map(Some)?,
+            Some((_, bytes)) => {
+                let mut deserializer =
+                    bincode::Deserializer::from_slice(bytes, bincode::DefaultOptions::default());
+                DocumentId::deserialize(&mut deserializer).map(Some)?
+                // bincode::deserialize(bytes).map(Some)?
+            }
             None => None,
         };
 

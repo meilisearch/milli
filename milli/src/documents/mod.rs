@@ -1,7 +1,6 @@
 mod builder;
 pub mod bumpalo_json;
 pub mod document_formats;
-mod bumpalo_json;
 mod document_visitor;
 mod reader;
 
@@ -16,6 +15,7 @@ pub enum Error {
     ParseFloat { error: std::num::ParseFloatError, line: usize, value: String },
     Csv(csv::Error),
     Json(serde_json::Error),
+    Bincode(bincode::Error),
     Grenad(grenad::Error),
     Io(io::Error),
 }
@@ -44,6 +44,12 @@ impl From<grenad::Error> for Error {
     }
 }
 
+impl From<bincode::Error> for Error {
+    fn from(other: bincode::Error) -> Self {
+        Self::Bincode(other)
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -54,6 +60,7 @@ impl fmt::Display for Error {
             Error::Grenad(e) => write!(f, "{}", e),
             Error::Csv(e) => write!(f, "{}", e),
             Error::Json(e) => write!(f, "{}", e),
+            Error::Bincode(e) => write!(f, "{}", e),
         }
     }
 }
@@ -91,6 +98,7 @@ macro_rules! documents {
 mod test {
     use std::io::Cursor;
 
+    use bumpalo::Bump;
     use serde_json::json;
 
     use super::*;
@@ -106,7 +114,7 @@ mod test {
             },
             "bool": true
         });
-
+        let bump = Bump::new();
         let mut builder = DocumentsBatchBuilder::new(Vec::new());
         builder.append_json_object(value.as_object().unwrap()).unwrap();
         let vector = builder.into_inner().unwrap();
@@ -115,9 +123,10 @@ mod test {
             DocumentsBatchReader::from_reader(Cursor::new(vector)).unwrap().into_cursor();
 
         // assert_eq!(documents.documents_batch_index().iter().count(), 5);
-        let reader = documents.next_document().unwrap().unwrap();
+        let reader: &_ = bump.alloc(documents.next_bump_document(&bump).unwrap().unwrap());
+        let reader: crate::Object = reader.into();
         assert_eq!(reader.iter().count(), 5);
-        assert!(documents.next_document().unwrap().is_none());
+        assert!(documents.next_bump_document(&bump).unwrap().is_none());
     }
 
     #[test]
@@ -128,7 +137,7 @@ mod test {
         let doc2 = json!({
             "toto": false,
         });
-
+        let bump = Bump::new();
         let mut builder = DocumentsBatchBuilder::new(Vec::new());
         builder.append_json_object(doc1.as_object().unwrap()).unwrap();
         builder.append_json_object(doc2.as_object().unwrap()).unwrap();
@@ -137,10 +146,11 @@ mod test {
         let mut documents =
             DocumentsBatchReader::from_reader(io::Cursor::new(vector)).unwrap().into_cursor();
 
-        let reader = documents.next_document().unwrap().unwrap();
+        let reader: &_ = bump.alloc(documents.next_bump_document(&bump).unwrap().unwrap());
+        let reader: crate::Object = reader.into();
         assert_eq!(reader.iter().count(), 1);
-        assert!(documents.next_document().unwrap().is_some());
-        assert!(documents.next_document().unwrap().is_none());
+        assert!(documents.next_bump_document(&bump).unwrap().is_some());
+        assert!(documents.next_bump_document(&bump).unwrap().is_none());
     }
 
     #[test]
@@ -150,9 +160,10 @@ mod test {
                 "toto": ["hello"]
             }
         }]);
-
+        let bump = Bump::new();
         let mut cursor = docs_reader.into_cursor();
-        let doc = cursor.next_document().unwrap().unwrap();
+        let doc: &_ = bump.alloc(cursor.next_bump_document(&bump).unwrap().unwrap());
+        let doc: crate::Object = doc.into();
         let nested = doc.get("hello").unwrap();
         assert_eq!(nested, &json!({ "toto": ["hello"] }));
     }

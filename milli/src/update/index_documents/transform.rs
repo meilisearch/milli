@@ -1,9 +1,3 @@
-use std::borrow::Cow;
-use std::collections::hash_map::Entry;
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-
 use bumpalo::Bump;
 use byteorder::ReadBytesExt;
 use fxhash::FxHashMap;
@@ -11,12 +5,18 @@ use grenad::ChunkCreator;
 use heed::RoTxn;
 use obkv::{KvReader, KvWriter};
 use roaring::RoaringBitmap;
+use serde::Serialize;
 use smartstring::SmartString;
+use std::borrow::Cow;
+use std::collections::hash_map::Entry;
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 
 use super::enriched::EnrichedBumpDocument;
 use super::helpers::{create_sorter, create_writer, keep_latest_obkv, merge_obkvs, MergeFn};
 use super::{IndexDocumentsMethod, IndexerConfig};
-use crate::documents::bumpalo_json::{self, serialize_json};
+use crate::documents::bumpalo_json::{self, serialize_bincode};
 use crate::error::{Error, InternalError, UserError};
 use crate::index::db_name;
 use crate::update::index_documents::enriched::EnrichedDocumentsBatchReader;
@@ -106,7 +106,7 @@ where
     // The steps to follow are:
     // 1. Map each key-value pair in the document as follows:
     //      * the key is mapped to its corresponding FieldId using `fields_ids_map`
-    //      * the value is serialized to a byte vector using serde_json::to_vec
+    //      * the value is serialized to a byte vector using bincode::serialize
     // 2. Sort the result so that the keys (FieldIds) are in order, which is required for insertion into the obkv
     // 3. Make an obkv from the sorted result
     // 4. Insert the obkv into the sorter under the key `docid`
@@ -114,7 +114,7 @@ where
 
     for (index, (key, value)) in document.0.iter().enumerate() {
         let value_buffer = buffers.get_value_bytes_buffer(index);
-        serialize_json(value.as_ref(), value_buffer).unwrap();
+        serialize_bincode(value.as_ref(), value_buffer).unwrap();
 
         let field_id = fields_ids_map.id(key).unwrap();
         buffers.sorted_documents.push((index, field_id));
@@ -207,7 +207,7 @@ impl<'a, 'i> Transform<'a, 'i> {
     document ID and the value is the document encoded as an OBKV. Note that this is done twice:
         1. Once for the original document. In this case the keys in the OBKV are the "top-level" keys of
         documents and the values are the Json values corresponding to those keys.
-        2. Once for the flattened document created by `flatten_serde_json::flatten`
+        2. Once for the flattened document created by `bumpalo_json::flatten`
 
     5. Create the `primary_key` in the database if it didn't exist.
     */
@@ -237,7 +237,6 @@ impl<'a, 'i> Transform<'a, 'i> {
                 } else {
                     break;
                 };
-
             let EnrichedBumpDocument { document: original_document, document_id: external_id } =
                 enriched_document;
 
@@ -315,7 +314,7 @@ impl<'a, 'i> Transform<'a, 'i> {
                 let mut document = bumpalo::collections::vec::Vec::new_in(&bump);
                 for (field_id, value) in reader.iter() {
                     let key: &str = bump.alloc_str(self.fields_ids_map.name(field_id).unwrap()); // TODO: error handling
-                    let value = bumpalo_json::deserialize_json_slice(value, &bump).unwrap(); // TODO: error handling
+                    let value = bumpalo_json::deserialize_bincode_slice(value, &bump).unwrap(); // TODO: error handling
                     document.push((key, bumpalo_json::MaybeMut::Mut(bump.alloc(value))));
                 }
                 let document: &_ = bump.alloc(bumpalo_json::Map(document));
@@ -555,7 +554,9 @@ impl<'a, 'i> Transform<'a, 'i> {
         );
 
         let mut obkv_buffer = Vec::new();
+        let mut bump = bumpalo::Bump::new();
         for result in self.index.documents.iter(wtxn)? {
+            bump.reset();
             let (docid, obkv) = result?;
             let docid = docid.get();
 
@@ -574,7 +575,7 @@ impl<'a, 'i> Transform<'a, 'i> {
 
             // Once we have the document. We're going to flatten it
             // and insert it in the flattened sorter.
-            let mut doc = serde_json::Map::new();
+            let mut doc = bumpalo_json::Map(bumpalo::collections::vec::Vec::new_in(&bump));
 
             let reader = obkv::KvReader::new(buffer);
             for (k, v) in reader.iter() {
@@ -582,18 +583,18 @@ impl<'a, 'i> Transform<'a, 'i> {
                     field_id: k,
                     process: "Accessing field distribution in transform.",
                 })?;
-                let value = serde_json::from_slice::<serde_json::Value>(v)
-                    .map_err(InternalError::SerdeJson)?;
-                doc.insert(key.to_string(), value);
+                let value = bumpalo_json::deserialize_bincode_slice(v, &bump)
+                    .map_err(InternalError::Bincode)?;
+                doc.0.push((bump.alloc_str(key), bumpalo_json::MaybeMut::Ref(bump.alloc(value))));
             }
-
-            let flattened = flatten_serde_json::flatten(&doc);
+            let doc = bump.alloc(doc);
+            let flattened = bumpalo_json::flatten(doc, &bump);
 
             // Once we have the flattened version we can convert it back to obkv and
             // insert all the new generated fields_ids (if any) in the fields ids map.
             let mut buffer: Vec<u8> = Vec::new();
             let mut writer = KvWriter::new(&mut buffer);
-            let mut flattened: Vec<_> = flattened.iter().collect();
+            let mut flattened: Vec<_> = flattened.0.iter().collect();
             // we reorder the field to get all the known field first
             flattened.sort_unstable_by_key(|(key, _)| {
                 new_fields_ids_map.id(&key).unwrap_or(FieldId::MAX)
@@ -602,8 +603,12 @@ impl<'a, 'i> Transform<'a, 'i> {
             for (key, value) in flattened {
                 let fid =
                     new_fields_ids_map.insert(&key).ok_or(UserError::AttributeLimitReached)?;
-                let value = serde_json::to_vec(&value).map_err(InternalError::SerdeJson)?;
-                writer.insert(fid, &value)?;
+                // TODO: avoid alloc
+                let mut value_bytes = Vec::with_capacity(1024);
+                let mut serializer =
+                    bincode::Serializer::new(&mut value_bytes, bincode::DefaultOptions::default());
+                value.as_ref().serialize(&mut serializer).map_err(InternalError::Bincode)?;
+                writer.insert(fid, &value_bytes)?;
             }
             flattened_writer.insert(docid.to_be_bytes(), &buffer)?;
         }

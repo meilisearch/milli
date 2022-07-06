@@ -54,6 +54,8 @@ pub enum InternalError {
     #[error(transparent)]
     SerdeJson(#[from] serde_json::Error),
     #[error(transparent)]
+    Bincode(#[from] bincode::Error),
+    #[error(transparent)]
     Serialization(#[from] SerializationError),
     #[error(transparent)]
     Store(#[from] MdbError),
@@ -135,6 +137,8 @@ only composed of alphanumeric characters (a-z A-Z 0-9), hyphens (-) and undersco
     PrimaryKeyCannotBeChanged(String),
     #[error(transparent)]
     SerdeJson(serde_json::Error),
+    #[error(transparent)]
+    Bincode(bincode::Error),
     #[error(transparent)]
     SortError(#[from] SortError),
     #[error("An unknown internal document id have been used: `{document_id}`.")]
@@ -220,6 +224,7 @@ impl From<DocumentsBatchCursorError> for Error {
         match error {
             DocumentsBatchCursorError::Grenad(e) => Error::from(e),
             DocumentsBatchCursorError::SerdeJson(e) => Error::from(InternalError::from(e)),
+            DocumentsBatchCursorError::Bincode(e) => Error::from(InternalError::from(e)),
         }
     }
 }

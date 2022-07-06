@@ -2,7 +2,12 @@ use std::borrow::Borrow;
 use std::fmt::{self, Debug, Display};
 use std::io::{self, BufRead, Seek, Write};
 
+use bumpalo::Bump;
+use serde::de::DeserializeSeed;
+
 use crate::documents::{DocumentsBatchBuilder, Error};
+
+use super::bumpalo_json::MapJsonVisitor;
 
 type Result<T> = std::result::Result<T, DocumentFormatError>;
 
@@ -98,15 +103,26 @@ pub fn read_csv(input: impl BufRead, writer: impl Write + Seek) -> Result<usize>
 pub fn read_ndjson(mut input: impl BufRead, writer: impl Write + Seek) -> Result<usize> {
     let mut builder = DocumentsBatchBuilder::new(writer);
     let mut buf = String::with_capacity(1024);
+    let mut bump = Bump::new();
     while input.read_line(&mut buf)? > 0 {
+        bump.reset();
         if buf == "\n" {
             buf.clear();
             continue;
         }
+        let mut de = serde_json::Deserializer::from_str(&buf);
+        let seed = MapJsonVisitor { bump: &bump };
+        let json = seed.deserialize(&mut de).map_err(|e| {
+            DocumentFormatError::MalformedPayload(
+                crate::documents::Error::Json(e),
+                PayloadType::Ndjson,
+            )
+        })?;
         builder
-            .append_unparsed_json_object(&buf)
+            .append_bump_json_object(&json)
             .map_err(Into::into)
             .map_err(DocumentFormatError::Internal)?;
+
         buf.clear();
     }
 

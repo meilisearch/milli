@@ -3,10 +3,12 @@ use std::fs::File;
 use std::io;
 use std::mem::size_of;
 
+use bumpalo::Bump;
+use bumpalo_json::Value;
 use heed::zerocopy::AsBytes;
-use serde_json::Value;
 
 use super::helpers::{create_sorter, keep_first, sorter_into_reader, GrenadParameters};
+use crate::documents::bumpalo_json;
 use crate::error::InternalError;
 use crate::facet::value_encoding::f64_into_bytes;
 use crate::{DocumentId, FieldId, Result};
@@ -38,17 +40,20 @@ pub fn extract_fid_docid_facet_values<R: io::Read + io::Seek>(
         indexer.max_nb_chunks,
         max_memory.map(|m| m / 2),
     );
-
+    let mut bump = Bump::new();
     let mut key_buffer = Vec::new();
     let mut cursor = obkv_documents.into_cursor()?;
     while let Some((docid_bytes, value)) = cursor.move_on_next()? {
+        bump.reset();
         let obkv = obkv::KvReader::new(value);
 
         for (field_id, field_bytes) in obkv.iter() {
             if faceted_fields.contains(&field_id) {
-                let value =
-                    serde_json::from_slice(field_bytes).map_err(InternalError::SerdeJson)?;
-                let (numbers, strings) = extract_facet_values(&value);
+                let value = bump.alloc(
+                    bumpalo_json::deserialize_bincode_slice(field_bytes, &bump)
+                        .map_err(InternalError::Bincode)?,
+                );
+                let (numbers, strings) = extract_facet_values(value);
 
                 key_buffer.clear();
 
@@ -83,9 +88,11 @@ pub fn extract_fid_docid_facet_values<R: io::Read + io::Seek>(
     ))
 }
 
-fn extract_facet_values(value: &Value) -> (Vec<f64>, Vec<(String, String)>) {
-    fn inner_extract_facet_values(
-        value: &Value,
+fn extract_facet_values<'bump>(
+    value: &'bump bumpalo_json::Value<'bump>,
+) -> (Vec<f64>, Vec<(String, String)>) {
+    fn inner_extract_facet_values<'bump>(
+        value: &'bump bumpalo_json::Value<'bump>,
         can_recurse: bool,
         output_numbers: &mut Vec<f64>,
         output_strings: &mut Vec<(String, String)>,
@@ -93,23 +100,28 @@ fn extract_facet_values(value: &Value) -> (Vec<f64>, Vec<(String, String)>) {
         match value {
             Value::Null => (),
             Value::Bool(b) => output_strings.push((b.to_string(), b.to_string())),
-            Value::Number(number) => {
-                if let Some(float) = number.as_f64() {
-                    output_numbers.push(float);
-                }
+            Value::SignedInteger(x) => {
+                output_numbers.push(*x as f64);
+            }
+            Value::UnsignedInteger(x) => {
+                output_numbers.push(*x as f64);
+            }
+            Value::Float(x) => {
+                output_numbers.push(*x);
             }
             Value::String(original) => {
                 let normalized = original.trim().to_lowercase();
-                output_strings.push((normalized, original.clone()));
+                output_strings.push((normalized, original.to_string()));
             }
-            Value::Array(values) => {
+            Value::Sequence(values) => {
                 if can_recurse {
                     for value in values {
+                        let value = value.as_ref();
                         inner_extract_facet_values(value, false, output_numbers, output_strings);
                     }
                 }
             }
-            Value::Object(_) => (),
+            Value::Map(_) => (),
         }
     }
 

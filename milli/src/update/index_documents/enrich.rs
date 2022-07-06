@@ -46,8 +46,9 @@ pub fn enrich_documents_batch<R: Read + Seek>(
         None => {
             // here we look at the first document to see if it has a primary key
             let mut primary_key_from_first_doc = None;
-            if let Some(first_document) = cursor.next_document()? {
-                for key in first_document.keys() {
+            let bump = Bump::new();
+            if let Some(first_document) = cursor.next_bump_document(&bump)? {
+                for (key, _) in first_document.0.iter() {
                     if key.to_lowercase().contains(DEFAULT_PRIMARY_KEY) {
                         primary_key_from_first_doc = Some(key.clone());
                         break;
@@ -55,7 +56,7 @@ pub fn enrich_documents_batch<R: Read + Seek>(
                 }
             };
             if let Some(primary_key_from_first_doc) = primary_key_from_first_doc {
-                PrimaryKey::flat_owned(primary_key_from_first_doc)
+                PrimaryKey::flat_owned(primary_key_from_first_doc.to_string())
             } else if autogenerate_docids {
                 PrimaryKey::flat(DEFAULT_PRIMARY_KEY)
             } else {
@@ -64,7 +65,6 @@ pub fn enrich_documents_batch<R: Read + Seek>(
         }
     };
     cursor.reset();
-
     // If the settings specifies that a _geo field must be used therefore we must check the
     // validity of it in all the documents of this batch
     let look_for_geo_field = index.sortable_fields(rtxn)?.contains("_geo");
@@ -99,8 +99,12 @@ pub fn enrich_documents_batch<R: Read + Seek>(
             }
         }
 
-        let document_id = serde_json::to_vec(&document_id).map_err(InternalError::SerdeJson)?;
-        external_ids.insert(count.to_be_bytes(), document_id)?;
+        // TODO: avoid alloc
+        let mut document_id_bytes = Vec::with_capacity(1024);
+        let mut serializer =
+            bincode::Serializer::new(&mut document_id_bytes, bincode::DefaultOptions::default());
+        document_id.serialize(&mut serializer).map_err(InternalError::Bincode)?;
+        external_ids.insert(count.to_be_bytes(), document_id_bytes)?;
         count += 1;
     }
 

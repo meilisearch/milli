@@ -3,7 +3,6 @@ use std::io;
 
 use bumpalo::Bump;
 use concat_arrays::concat_arrays;
-use serde_json::Value;
 
 use super::helpers::{create_writer, writer_into_reader, GrenadParameters};
 use crate::documents::bumpalo_json;
@@ -33,9 +32,11 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
         let obkv = obkv::KvReader::new(value);
         // since we only needs the primary key when we throw an error we create this getter to
         // lazily get it when needed
-        let document_id = || -> Value {
+        let document_id = || -> serde_json::Value {
             let document_id = obkv.get(primary_key_id).unwrap();
-            serde_json::from_slice(document_id).unwrap()
+            let object: &_ =
+                bump.alloc(bumpalo_json::deserialize_bincode_slice(document_id, &bump).unwrap());
+            serde_json::Value::from(object)
         };
 
         // first we get the two fields
@@ -45,12 +46,12 @@ pub fn extract_geo_points<R: io::Read + io::Seek>(
         if let Some((lat, lng)) = lat.zip(lng) {
             // then we extract the values
             let lat_value = bump.alloc(
-                bumpalo_json::deserialize_json_slice(lat, &bump)
-                    .map_err(InternalError::SerdeJson)?,
+                bumpalo_json::deserialize_bincode_slice(lat, &bump)
+                    .map_err(InternalError::Bincode)?,
             );
             let lng_value = bump.alloc(
-                bumpalo_json::deserialize_json_slice(lng, &bump)
-                    .map_err(InternalError::SerdeJson)?,
+                bumpalo_json::deserialize_bincode_slice(lng, &bump)
+                    .map_err(InternalError::Bincode)?,
             );
 
             let lat = extract_float_from_value(lat_value).map_err(|lat| GeoError::BadLatitude {
