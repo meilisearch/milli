@@ -3,7 +3,7 @@ use std::io;
 use std::mem::size_of;
 
 use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use roaring::RoaringBitmap;
+use roaring::{IterExt, RoaringBitmap};
 
 /// This is the limit where using a byteorder became less size efficient
 /// than using a direct roaring encoding, it is also the point where we are able
@@ -59,37 +59,29 @@ impl CboRoaringBitmapCodec {
     /// serialized in the buffer else a RoaringBitmap is created from the
     /// values and is serialized in the buffer.
     pub fn merge_into(slices: &[Cow<[u8]>], buffer: &mut Vec<u8>) -> io::Result<()> {
-        let mut roaring = RoaringBitmap::new();
         let mut vec = Vec::new();
 
-        for bytes in slices {
-            if bytes.len() <= THRESHOLD * size_of::<u32>() {
-                let mut reader = bytes.as_ref();
-                while let Ok(integer) = reader.read_u32::<NativeEndian>() {
-                    vec.push(integer);
+        let roaring = slices
+            .iter()
+            .map(|slice| {
+                if slice.len() <= THRESHOLD * size_of::<u32>() {
+                    let mut reader = slice.as_ref();
+                    while let Ok(integer) = reader.read_u32::<NativeEndian>() {
+                        vec.push(integer);
+                    }
+                    vec.sort_unstable();
+                    // we can unwrap safely because the vector is sorted
+                    let res = RoaringBitmap::from_sorted_iter(vec.iter().copied()).unwrap();
+                    vec.clear();
+                    Ok(res)
+                } else {
+                    RoaringBitmap::deserialize_from(slice.as_ref()).into()
                 }
-            } else {
-                roaring |= RoaringBitmap::deserialize_from(bytes.as_ref())?;
-            }
-        }
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let roaring = roaring.or();
 
-        if roaring.is_empty() {
-            vec.sort_unstable();
-            vec.dedup();
-
-            if vec.len() <= THRESHOLD {
-                for integer in vec {
-                    buffer.extend_from_slice(&integer.to_ne_bytes());
-                }
-            } else {
-                // We can unwrap safely because the vector is sorted upper.
-                let roaring = RoaringBitmap::from_sorted_iter(vec.into_iter()).unwrap();
-                roaring.serialize_into(buffer)?;
-            }
-        } else {
-            roaring.extend(vec);
-            roaring.serialize_into(buffer)?;
-        }
+        roaring.serialize_into(buffer)?;
 
         Ok(())
     }
