@@ -81,7 +81,13 @@ impl CboRoaringBitmapCodec {
             .collect::<io::Result<Vec<_>>>()?;
         let roaring = roaring.or();
 
-        roaring.serialize_into(buffer)?;
+        if roaring.len() as usize <= THRESHOLD {
+            for elem in roaring {
+                buffer.extend_from_slice(&elem.to_ne_bytes());
+            }
+        } else {
+            roaring.serialize_into(buffer)?;
+        }
 
         Ok(())
     }
