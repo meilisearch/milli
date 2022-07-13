@@ -1,3 +1,6 @@
+#![allow(soft_unstable)]
+#![feature(test)]
+
 #[macro_use]
 pub mod documents;
 
