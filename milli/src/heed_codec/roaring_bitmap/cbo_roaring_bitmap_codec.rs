@@ -215,7 +215,6 @@ mod tests {
 
         #[bench]
         fn bench_small_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
-            std::thread::sleep_ms(30000);
             #[rustfmt::skip]
         let inputs = [
             vec![Cow::Owned(vec![255, 56, 14, 0]),  Cow::Owned(vec![196, 43, 14, 0])],
@@ -237,7 +236,6 @@ mod tests {
 
         #[bench]
         fn bench_medium_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
-            std::thread::sleep_ms(1000);
             #[rustfmt::skip]
         let inputs = [
             vec![Cow::Owned(vec![232, 35, 9, 0]), Cow::Owned(vec![192, 10, 9, 0]), Cow::Owned(vec![91, 33, 9, 0]), Cow::Owned(vec![204, 29, 9, 0])],
