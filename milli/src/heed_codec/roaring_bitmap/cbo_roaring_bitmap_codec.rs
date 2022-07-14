@@ -239,13 +239,15 @@ mod tests {
         assert_eq!(bitmap, expected);
     }
 
-    extern crate test;
-    use test::Bencher;
+    #[cfg(feature = "nightly")]
+    mod bench {
+        extern crate test;
+        use test::Bencher;
 
-    #[bench]
-    fn bench_small_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
-        std::thread::sleep_ms(30000);
-        #[rustfmt::skip]
+        #[bench]
+        fn bench_small_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
+            std::thread::sleep_ms(30000);
+            #[rustfmt::skip]
         let inputs = [
             vec![Cow::Owned(vec![255, 56, 14, 0]),  Cow::Owned(vec![196, 43, 14, 0])],
             vec![Cow::Owned(vec![63, 101, 3, 0]),   Cow::Owned(vec![71, 136, 3, 0])],
@@ -257,17 +259,17 @@ mod tests {
             vec![Cow::Owned(vec![73, 176, 3, 0]),   Cow::Owned(vec![126, 167, 3, 0])],
         ];
 
-        let mut vec = Vec::new();
-        for input in inputs {
-            bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
-            vec.clear();
+            let mut vec = Vec::new();
+            for input in inputs {
+                bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
+                vec.clear();
+            }
         }
-    }
 
-    #[bench]
-    fn bench_medium_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
-        std::thread::sleep_ms(1000);
-        #[rustfmt::skip]
+        #[bench]
+        fn bench_medium_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
+            std::thread::sleep_ms(1000);
+            #[rustfmt::skip]
         let inputs = [
             vec![Cow::Owned(vec![232, 35, 9, 0]), Cow::Owned(vec![192, 10, 9, 0]), Cow::Owned(vec![91, 33, 9, 0]), Cow::Owned(vec![204, 29, 9, 0])],
             vec![Cow::Owned(vec![144, 39, 9, 0]), Cow::Owned(vec![162, 66, 9, 0]), Cow::Owned(vec![146, 11, 9, 0]), Cow::Owned(vec![174, 61, 9, 0])],
@@ -279,10 +281,11 @@ mod tests {
             vec![Cow::Owned(vec![215, 253, 13, 0]), Cow::Owned(vec![225, 194, 13, 0]), Cow::Owned(vec![37, 189, 13, 0]), Cow::Owned(vec![242, 212, 13, 0])],
         ];
 
-        let mut vec = Vec::new();
-        for input in inputs {
-            bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
-            vec.clear();
+            let mut vec = Vec::new();
+            for input in inputs {
+                bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
+                vec.clear();
+            }
         }
     }
 }

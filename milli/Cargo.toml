@@ -55,6 +55,7 @@ insta = "1.18.1"
 maplit = "1.0.2"
 md5 = "0.7.0"
 rand = "0.8.5"
+select-rustc = "0.1"
 
 [features]
 default = []
