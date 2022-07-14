@@ -98,37 +98,6 @@ impl CboRoaringBitmapCodec {
             bitmap.serialize_into(buffer)?;
         }
 
-        /*
-        match (bitmaps.is_empty(), buffer.len() >= THRESHOLD * size_of::<u32>()) {
-            (true, true) => {
-                // we need to sort the buffer as if it was containing u32
-                let u32_buffer: &mut Vec<u32> = unsafe { convert_vec(buffer) };
-                u32_buffer.sort_unstable();
-                u32_buffer.dedup();
-
-                let bitmap = RoaringBitmap::from_sorted_iter(u32_buffer.iter().copied()).unwrap();
-                buffer.clear();
-                bitmap.serialize_into(buffer)?;
-            }
-            (true, false) => (),
-            (false, true) => {
-                // we need to sort the buffer as if it was containing u32
-                let u32_buffer: &mut Vec<u32> = unsafe { convert_vec(buffer) };
-                u32_buffer.sort_unstable();
-                u32_buffer.dedup();
-
-                let bitmap = RoaringBitmap::from_sorted_iter(u32_buffer.iter().copied()).unwrap();
-                let bitmap = bitmaps.into_iter().chain(std::iter::once(bitmap)).or();
-                buffer.clear();
-                bitmap.serialize_into(buffer)?;
-            }
-            (false, false) => {
-                let bitmap = bitmaps.into_iter().or();
-                bitmap.serialize_into(buffer)?;
-            }
-        }
-        */
-
         Ok(())
     }
 }
