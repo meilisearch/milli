@@ -214,21 +214,71 @@ pub fn write_into_lmdb_database(
     merge: MergeFn,
 ) -> Result<()> {
     debug!("Writing MTBL stores...");
-    let before = Instant::now();
 
+    let before = Instant::now();
     let mut cursor = reader.into_cursor()?;
-    while let Some((k, v)) = cursor.move_on_next()? {
-        let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
+
+    let (first_key, first_value) =
+        if let Some(first) = cursor.move_on_next()? { first } else { return Ok(()) };
+
+    let last_db_item = database.last::<_, ByteSlice, ByteSlice>(wtxn)?;
+    let can_append = {
+        if database.is_empty(wtxn)? {
+            true
+        } else if let Some((last_db_key, _)) = last_db_item {
+            if last_db_key < first_key {
+                true
+            } else {
+                false
+            }
+        } else {
+            unreachable!()
+        }
+    };
+
+    if can_append {
+        database.append::<_, ByteSlice, ByteSlice>(wtxn, first_key, first_value)?;
+
+        let mut out_iter = database.iter_mut::<_, ByteSlice, ByteSlice>(wtxn)?;
+        while let Some((k, v)) = cursor.move_on_next()? {
+            // safety: we don't keep references from inside the LMDB database.
+            unsafe { out_iter.append(k, v)? };
+        }
+    } else {
+        let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, first_key)?;
         match iter.next().transpose()? {
-            Some((key, old_val)) if key == k => {
-                let vals = &[Cow::Borrowed(old_val), Cow::Borrowed(v)][..];
-                let val = merge(k, &vals)?;
+            Some((key, old_val)) if key == first_key => {
+                let vals = vec![Cow::Borrowed(old_val), Cow::Borrowed(first_value)];
+                let val = merge(first_key, &vals).map_err(|_| {
+                    // TODO just wrap this error?
+                    InternalError::IndexingMergingKeys { process: "get-put-merge" }
+                })?;
                 // safety: we don't keep references from inside the LMDB database.
-                unsafe { iter.put_current(k, &val)? };
+                unsafe { iter.put_current(first_key, &val)? };
+                drop(iter);
             }
             _ => {
                 drop(iter);
-                database.put::<_, ByteSlice, ByteSlice>(wtxn, k, v)?;
+                database.put::<_, ByteSlice, ByteSlice>(wtxn, first_key, first_value)?;
+            }
+        }
+
+        while let Some((k, v)) = cursor.move_on_next()? {
+            let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
+            match iter.next().transpose()? {
+                Some((key, old_val)) if key == k => {
+                    let vals = vec![Cow::Borrowed(old_val), Cow::Borrowed(v)];
+                    let val = merge(k, &vals).map_err(|_| {
+                        // TODO just wrap this error?
+                        InternalError::IndexingMergingKeys { process: "get-put-merge" }
+                    })?;
+                    // safety: we don't keep references from inside the LMDB database.
+                    unsafe { iter.put_current(k, &val)? };
+                }
+                _ => {
+                    drop(iter);
+                    database.put::<_, ByteSlice, ByteSlice>(wtxn, k, v)?;
+                }
             }
         }
     }
@@ -247,13 +297,52 @@ pub fn sorter_into_lmdb_database(
     let before = Instant::now();
 
     let mut merger_iter = sorter.into_stream_merger_iter()?;
-    if database.is_empty(wtxn)? {
+
+    let (first_key, first_value) =
+        if let Some(first) = merger_iter.next()? { first } else { return Ok(()) };
+
+    let last_db_item = database.last::<_, ByteSlice, ByteSlice>(wtxn)?;
+    let can_append = {
+        if database.is_empty(wtxn)? {
+            true
+        } else if let Some((last_db_key, _)) = last_db_item {
+            if last_db_key < first_key {
+                true
+            } else {
+                false
+            }
+        } else {
+            unreachable!()
+        }
+    };
+
+    if can_append {
+        database.append::<_, ByteSlice, ByteSlice>(wtxn, first_key, first_value)?;
+
         let mut out_iter = database.iter_mut::<_, ByteSlice, ByteSlice>(wtxn)?;
         while let Some((k, v)) = merger_iter.next()? {
             // safety: we don't keep references from inside the LMDB database.
             unsafe { out_iter.append(k, v)? };
         }
     } else {
+        let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, first_key)?;
+        match iter.next().transpose()? {
+            Some((key, old_val)) if key == first_key => {
+                let vals = vec![Cow::Borrowed(old_val), Cow::Borrowed(first_value)];
+                let val = merge(first_key, &vals).map_err(|_| {
+                    // TODO just wrap this error?
+                    InternalError::IndexingMergingKeys { process: "get-put-merge" }
+                })?;
+                // safety: we don't keep references from inside the LMDB database.
+                unsafe { iter.put_current(first_key, &val)? };
+                drop(iter);
+            }
+            _ => {
+                drop(iter);
+                database.put::<_, ByteSlice, ByteSlice>(wtxn, first_key, first_value)?;
+            }
+        }
+
         while let Some((k, v)) = merger_iter.next()? {
             let mut iter = database.prefix_iter_mut::<_, ByteSlice, ByteSlice>(wtxn, k)?;
             match iter.next().transpose()? {
