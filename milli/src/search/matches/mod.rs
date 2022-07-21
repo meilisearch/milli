@@ -359,11 +359,11 @@ impl<'t, A: AsRef<[u8]>> Matcher<'t, '_, A> {
         if matches.len() > 1 {
             // positions of the first and the last match of the best matches interval in `matches`.
             let mut best_interval = (0, 0);
-            let mut best_interval_score = self.match_interval_score(&matches[0..=0]);
+            let mut best_interval_score = None;
             // current interval positions.
             let mut interval_first = 0;
             let mut interval_last = 0;
-            for (index, next_match) in matches.iter().enumerate().skip(1) {
+            for (index, next_match) in matches.iter().enumerate() {
                 // if next match would make interval gross more than crop_size,
                 // we compare the current interval with the best one,
                 // then we increase `interval_first` until next match can be added.
@@ -372,10 +372,15 @@ impl<'t, A: AsRef<[u8]>> Matcher<'t, '_, A> {
                         self.match_interval_score(&matches[interval_first..=interval_last]);
 
                     // keep interval if it's the best
-                    if interval_score > best_interval_score {
-                        best_interval = (interval_first, interval_last);
-                        best_interval_score = interval_score;
-                    }
+                    best_interval_score = match best_interval_score.take() {
+                        Some(best_interval_score) if interval_score <= best_interval_score => {
+                            Some(best_interval_score)
+                        }
+                        _ => {
+                            best_interval = (interval_first, interval_last);
+                            Some(interval_score)
+                        }
+                    };
 
                     // advance start of the interval while interval is longer than crop_size.
                     while next_match.word_position - matches[interval_first].word_position
@@ -390,7 +395,9 @@ impl<'t, A: AsRef<[u8]>> Matcher<'t, '_, A> {
             // compute the last interval score and compare it to the best one.
             let interval_score =
                 self.match_interval_score(&matches[interval_first..=interval_last]);
-            if interval_score > best_interval_score {
+            if best_interval_score
+                .map_or(true, |best_interval_score| interval_score > best_interval_score)
+            {
                 best_interval = (interval_first, interval_last);
             }
 
@@ -742,6 +749,19 @@ mod tests {
         assert_eq!(
             &matcher.format(format_options),
             "…void void void void void <em>split</em> <em>the</em> <em>world</em> void void"
+        );
+
+        // testing https://github.com/meilisearch/meilisearch/issues/2627
+        let matching_words = vec![(vec![MatchingWord::new("test".to_string(), 0, true)], vec![0])];
+        let matching_words = MatchingWords::new(matching_words);
+        let builder = MatcherBuilder::from_matching_words(matching_words);
+
+        let text = "Lorem ipsum dolor test sit amet, consetetur sadipscing elitr, sed test diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat.";
+        let mut matcher = builder.build(text);
+        let format_options = FormatOptions { highlight: true, crop: Some(20) };
+        assert_eq!(
+            &matcher.format(format_options),
+            "Lorem ipsum dolor <em>test</em> sit amet, consetetur sadipscing elitr, sed <em>test</em> diam nonumy eirmod tempor invidunt ut labore et dolore…"
         );
     }
 
