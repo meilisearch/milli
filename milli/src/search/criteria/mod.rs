@@ -315,14 +315,7 @@ pub fn resolve_query_tree(
 
                 Ok(candidates.and())
             }
-            Or(_, ops) => {
-                let candidates = ops
-                    .into_iter()
-                    .map(|op| resolve_operation(ctx, op, wdcache))
-                    .collect::<StdResult<Vec<_>, _>>()?;
-
-                Ok(candidates.or())
-            }
+            Or(_, ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).or(),
             Phrase(words) => resolve_phrase(ctx, &words),
             Query(q) => Ok(query_docids(ctx, q, wdcache)?),
         }
@@ -383,9 +376,9 @@ fn all_word_pair_proximity_docids<T: AsRef<str>, U: AsRef<str>>(
                     .map(|res| res.unwrap_or_default())
             })
         })
-        .collect::<StdResult<Vec<RoaringBitmap>, _>>()?;
+        .or()?;
 
-    Ok(docids.or())
+    Ok(docids)
 }
 
 fn query_docids(
