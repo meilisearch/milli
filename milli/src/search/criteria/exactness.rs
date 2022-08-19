@@ -201,12 +201,12 @@ fn resolve_state(
             }
         }
         AttributeStartsWith(mut allowed_candidates) => {
-            let mut candidates = RoaringBitmap::new();
             let attributes_ids = ctx.searchable_fields_ids()?;
-            for id in attributes_ids {
-                let attribute_candidates_array = attribute_start_with_docids(ctx, id, query)?;
-                candidates |= attribute_candidates_array.and();
-            }
+
+            let mut candidates = attributes_ids
+                .into_iter()
+                .map(|id| attribute_start_with_docids(ctx, id, query).map(IterExt::and))
+                .or()?;
 
             // only keep allowed candidates
             candidates &= &allowed_candidates;
@@ -223,27 +223,24 @@ fn resolve_state(
                 use ExactQueryPart::*;
                 match part {
                     Synonyms(synonyms) => {
-                        for synonym in synonyms {
-                            if let Some(synonym_candidates) = ctx.word_docids(synonym)? {
-                                candidates |= synonym_candidates;
-                            }
-                        }
+                        let tmp = synonyms
+                            .into_iter()
+                            .filter_map(|synonym| ctx.word_docids(synonym).transpose())
+                            .or()?;
+
+                        candidates |= tmp;
                     }
                     // compute intersection on pair of words with a proximity of 0.
                     Phrase(phrase) => {
-                        let mut bitmaps = Vec::with_capacity(phrase.len().saturating_sub(1));
-                        for words in phrase.windows(2) {
-                            if let [left, right] = words {
-                                match ctx.word_pair_proximity_docids(left, right, 0)? {
-                                    Some(docids) => bitmaps.push(docids),
-                                    None => {
-                                        bitmaps.clear();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        candidates |= bitmaps.and();
+                        let bitmaps = phrase
+                            .windows(2)
+                            .map(|words| {
+                                ctx.word_pair_proximity_docids(&words[0], &words[1], 0)
+                                    .map(|o| o.unwrap_or_default())
+                            })
+                            .and()?;
+
+                        candidates |= bitmaps;
                     }
                 }
                 parts_candidates_array.push(candidates);
