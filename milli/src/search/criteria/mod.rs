@@ -452,23 +452,28 @@ fn query_pair_proximity_docids(
             let l_words =
                 word_derivations(&left, false, *typo, ctx.words_fst(), wdcache)?.to_owned();
             if prefix {
-                let mut docids = RoaringBitmap::new();
-                for (left, _) in l_words {
-                    let current_docids = match ctx.word_prefix_pair_proximity_docids(
-                        left.as_str(),
-                        right.as_str(),
-                        proximity,
-                    )? {
-                        Some(docids) => Ok(docids),
-                        None => {
-                            let r_words =
-                                word_derivations(&right, true, 0, ctx.words_fst(), wdcache)?;
-                            all_word_pair_proximity_docids(ctx, &[(left, 0)], &r_words, proximity)
+                l_words
+                    .into_iter()
+                    .map(|(left, _)| -> Result<_> {
+                        match ctx.word_prefix_pair_proximity_docids(
+                            left.as_str(),
+                            right.as_str(),
+                            proximity,
+                        )? {
+                            Some(docids) => Ok(docids),
+                            None => {
+                                let r_words =
+                                    word_derivations(&right, true, 0, ctx.words_fst(), wdcache)?;
+                                all_word_pair_proximity_docids(
+                                    ctx,
+                                    &[(left, 0)],
+                                    &r_words,
+                                    proximity,
+                                )
+                            }
                         }
-                    }?;
-                    docids |= current_docids;
-                }
-                Ok(docids)
+                    })
+                    .or()
             } else {
                 all_word_pair_proximity_docids(ctx, &l_words, &[(right, 0)], proximity)
             }
