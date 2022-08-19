@@ -391,15 +391,19 @@ fn query_docids(
         }
         QueryKind::Tolerant { typo, word } => {
             let words = word_derivations(&word, query.prefix, *typo, ctx.words_fst(), wdcache)?;
-            let mut docids = RoaringBitmap::new();
-            for (word, typo) in words {
-                let mut current_docids = ctx.word_docids(&word)?.unwrap_or_default();
-                if *typo == 0 {
-                    current_docids |= ctx.exact_word_docids(&word)?.unwrap_or_default()
-                }
-                docids |= current_docids;
-            }
-            Ok(docids)
+
+            words
+                .into_iter()
+                .flat_map(|(word, typo)| {
+                    let current_docids =
+                        ctx.word_docids(&word).map(|word| word.unwrap_or_default());
+                    let typo = (*typo == 0)
+                        .then(|| ctx.exact_word_docids(&word).map(|word| word.unwrap_or_default()));
+
+                    std::iter::once(current_docids).chain(typo)
+                })
+                .or()
+                .map_err(Error::from)
         }
     }
 }
