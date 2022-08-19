@@ -301,13 +301,10 @@ fn attribute_start_with_docids(
         use ExactQueryPart::*;
         match part {
             Synonyms(synonyms) => {
-                let mut synonyms_candidates = RoaringBitmap::new();
-                for word in synonyms {
-                    let wc = ctx.word_position_docids(word, pos)?;
-                    if let Some(word_candidates) = wc {
-                        synonyms_candidates |= word_candidates;
-                    }
-                }
+                let synonyms_candidates = synonyms
+                    .into_iter()
+                    .filter_map(|word| ctx.word_position_docids(word, pos).transpose())
+                    .or()?;
                 attribute_candidates_array.push(synonyms_candidates);
                 pos += 1;
             }
