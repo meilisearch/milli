@@ -15,7 +15,7 @@ use self::words::Words;
 use super::query_tree::{Operation, PrimitiveQueryPart, Query, QueryKind};
 use crate::search::criteria::geo::Geo;
 use crate::search::{word_derivations, WordDerivationsCache};
-use crate::{AscDesc as AscDescName, DocumentId, FieldId, Index, Member, Result};
+use crate::{AscDesc as AscDescName, DocumentId, Error, FieldId, Index, Member, Result};
 
 mod asc_desc;
 mod attribute;
@@ -307,14 +307,7 @@ pub fn resolve_query_tree(
         use Operation::{And, Or, Phrase, Query};
 
         match query_tree {
-            And(ops) => {
-                let candidates = ops
-                    .iter()
-                    .map(|op| resolve_operation(ctx, op, wdcache))
-                    .collect::<Result<Vec<_>>>()?;
-
-                Ok(candidates.and())
-            }
+            And(ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).and(),
             Or(_, ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).or(),
             Phrase(words) => resolve_phrase(ctx, &words),
             Query(q) => Ok(query_docids(ctx, q, wdcache)?),
@@ -325,41 +318,22 @@ pub fn resolve_query_tree(
 }
 
 pub fn resolve_phrase(ctx: &dyn Context, phrase: &[String]) -> Result<RoaringBitmap> {
-    let mut candidates = RoaringBitmap::new();
-    let mut first_iter = true;
     let winsize = phrase.len().min(7);
 
-    for win in phrase.windows(winsize) {
-        // Get all the documents with the matching distance for each word pairs.
-        let mut bitmaps = Vec::with_capacity(winsize.pow(2));
-        for (offset, s1) in win.iter().enumerate() {
-            for (dist, s2) in win.iter().skip(offset + 1).enumerate() {
-                match ctx.word_pair_proximity_docids(s1, s2, dist as u8 + 1)? {
-                    Some(m) => bitmaps.push(m),
-                    // If there are no document for this distance, there will be no
-                    // results for the phrase query.
-                    None => return Ok(RoaringBitmap::new()),
-                }
-            }
-        }
-
-        // We sort the bitmaps so that we perform the small intersections first, which is faster.
-        bitmaps.sort_unstable_by(|a, b| a.len().cmp(&b.len()));
-
-        for bitmap in bitmaps {
-            if first_iter {
-                candidates = bitmap;
-                first_iter = false;
-            } else {
-                candidates &= bitmap;
-            }
-            // There will be no match, return early
-            if candidates.is_empty() {
-                break;
-            }
-        }
-    }
-    Ok(candidates)
+    phrase
+        .windows(winsize)
+        .flat_map(|win| {
+            win.iter().enumerate().flat_map(move |(offset, s1)| {
+                win.iter().skip(offset + 1).enumerate().map(move |(dist, s2)| {
+                    ctx.word_pair_proximity_docids(s1, s2, dist as u8 + 1)
+                        // If there are no document for this distance, there will be no
+                        // results for the phrase query.
+                        .map(|m| m.unwrap_or_default())
+                })
+            })
+        })
+        .and()
+        .map_err(Error::from)
 }
 
 fn all_word_pair_proximity_docids<T: AsRef<str>, U: AsRef<str>>(
