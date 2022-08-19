@@ -371,15 +371,20 @@ fn query_docids(
                 Ok(docids)
             } else if query.prefix {
                 let words = word_derivations(&word, true, 0, ctx.words_fst(), wdcache)?;
-                let mut docids = RoaringBitmap::new();
-                for (word, _typo) in words {
-                    docids |= ctx.word_docids(&word)?.unwrap_or_default();
-                    // only add the exact docids if the word hasn't been derived
-                    if *original_typo == 0 {
-                        docids |= ctx.exact_word_docids(&word)?.unwrap_or_default();
-                    }
-                }
-                Ok(docids)
+
+                words
+                    .into_iter()
+                    .flat_map(|(word, _typo)| {
+                        let current_docids =
+                            ctx.word_docids(&word).map(|word| word.unwrap_or_default());
+                        let typo = (*original_typo == 0).then(|| {
+                            ctx.exact_word_docids(&word).map(|word| word.unwrap_or_default())
+                        });
+
+                        std::iter::once(current_docids).chain(typo)
+                    })
+                    .or()
+                    .map_err(Error::from)
             } else {
                 let mut docids = ctx.word_docids(&word)?.unwrap_or_default();
                 // only add the exact docids if the word hasn't been derived
