@@ -6,7 +6,7 @@ use either::Either;
 pub use filter_parser::{Condition, Error as FPError, FilterCondition, Span, Token};
 use heed::types::DecodeIgnore;
 use log::debug;
-use roaring::RoaringBitmap;
+use roaring::{IterExt, RoaringBitmap};
 
 use super::FacetNumberRange;
 use crate::error::{Error, UserError};
@@ -365,13 +365,18 @@ impl<'a> Filter<'a> {
                     let field_ids_map = index.fields_ids_map(rtxn)?;
 
                     if let Some(fid) = field_ids_map.id(fid.value()) {
-                        let mut bitmap = RoaringBitmap::new();
+                        let bitmap = els
+                            .into_iter()
+                            .map(|el| {
+                                Self::evaluate_operator(
+                                    rtxn,
+                                    index,
+                                    fid,
+                                    &Condition::Equal(el.clone()),
+                                )
+                            })
+                            .or()?;
 
-                        for el in els {
-                            let op = Condition::Equal(el.clone());
-                            let el_bitmap = Self::evaluate_operator(rtxn, index, fid, &op)?;
-                            bitmap |= el_bitmap;
-                        }
                         Ok(bitmap)
                     } else {
                         Ok(RoaringBitmap::new())
@@ -413,39 +418,14 @@ impl<'a> Filter<'a> {
                     }
                 }
             }
-            FilterCondition::Or(subfilters) => {
-                let mut bitmap = RoaringBitmap::new();
-                for f in subfilters {
-                    bitmap |=
-                        Self::inner_evaluate(&(f.clone()).into(), rtxn, index, filterable_fields)?;
-                }
-                Ok(bitmap)
-            }
-            FilterCondition::And(subfilters) => {
-                let mut subfilters_iter = subfilters.iter();
-                if let Some(first_subfilter) = subfilters_iter.next() {
-                    let mut bitmap = Self::inner_evaluate(
-                        &(first_subfilter.clone()).into(),
-                        rtxn,
-                        index,
-                        filterable_fields,
-                    )?;
-                    for f in subfilters_iter {
-                        if bitmap.is_empty() {
-                            return Ok(bitmap);
-                        }
-                        bitmap &= Self::inner_evaluate(
-                            &(f.clone()).into(),
-                            rtxn,
-                            index,
-                            filterable_fields,
-                        )?;
-                    }
-                    Ok(bitmap)
-                } else {
-                    Ok(RoaringBitmap::new())
-                }
-            }
+            FilterCondition::Or(subfilters) => subfilters
+                .into_iter()
+                .map(|f| Self::inner_evaluate(&(f.clone()).into(), rtxn, index, filterable_fields))
+                .or(),
+            FilterCondition::And(subfilters) => subfilters
+                .into_iter()
+                .map(|f| Self::inner_evaluate(&(f.clone()).into(), rtxn, index, filterable_fields))
+                .and(),
             FilterCondition::GeoLowerThan { point, radius } => {
                 if filterable_fields.contains("_geo") {
                     let base_point: [f64; 2] = [point[0].parse()?, point[1].parse()?];
