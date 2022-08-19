@@ -315,10 +315,11 @@ fn resolve_candidates<'t>(
         }
     }
 
-    let mut candidates = RoaringBitmap::new();
-    for (_, _, cds) in resolve_operation(ctx, query_tree, proximity, cache, wdcache)? {
-        candidates |= cds;
-    }
+    let candidates = resolve_operation(ctx, query_tree, proximity, cache, wdcache)?
+        .into_iter()
+        .map(|(_, _, cds)| cds)
+        .or();
+
     Ok(candidates)
 }
 
