@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::result::Result as StdResult;
 
 use roaring::{IterExt, RoaringBitmap};
 
