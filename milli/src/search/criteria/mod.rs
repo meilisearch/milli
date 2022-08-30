@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 
 use self::asc_desc::AscDesc;
 use self::attribute::Attribute;
@@ -306,8 +306,10 @@ pub fn resolve_query_tree(
         use Operation::{And, Or, Phrase, Query};
 
         match query_tree {
-            And(ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).and(),
-            Or(_, ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).or(),
+            And(ops) => {
+                ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).intersection()
+            }
+            Or(_, ops) => ops.into_iter().map(|op| resolve_operation(ctx, op, wdcache)).union(),
             Phrase(words) => resolve_phrase(ctx, &words),
             Query(q) => Ok(query_docids(ctx, q, wdcache)?),
         }
@@ -331,7 +333,7 @@ pub fn resolve_phrase(ctx: &dyn Context, phrase: &[String]) -> Result<RoaringBit
                 })
             })
         })
-        .and()
+        .intersection()
         .map_err(Error::from)
 }
 
@@ -349,7 +351,7 @@ fn all_word_pair_proximity_docids<T: AsRef<str>, U: AsRef<str>>(
                     .map(|res| res.unwrap_or_default())
             })
         })
-        .or()?;
+        .union()?;
 
     Ok(docids)
 }
@@ -382,7 +384,7 @@ fn query_docids(
 
                         std::iter::once(current_docids).chain(typo)
                     })
-                    .or()
+                    .union()
                     .map_err(Error::from)
             } else {
                 let mut docids = ctx.word_docids(&word)?.unwrap_or_default();
@@ -406,7 +408,7 @@ fn query_docids(
 
                     std::iter::once(current_docids).chain(typo)
                 })
-                .or()
+                .union()
                 .map_err(Error::from)
         }
     }
@@ -472,7 +474,7 @@ fn query_pair_proximity_docids(
                             }
                         }
                     })
-                    .or()
+                    .union()
             } else {
                 all_word_pair_proximity_docids(ctx, &l_words, &[(right, 0)], proximity)
             }

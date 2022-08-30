@@ -132,7 +132,7 @@ use grenad::{CompressionType, Reader, Writer};
 use heed::types::{ByteSlice, DecodeIgnore};
 use heed::{BytesDecode, BytesEncode, Error};
 use log::debug;
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 use time::OffsetDateTime;
 
 use crate::error::InternalError;
@@ -301,7 +301,7 @@ fn compute_facet_number_levels<'t>(
                 first_level_size,
                 level_group_size,
                 &mut |bitmaps, _, _| {
-                    number_document_ids |= bitmaps.or();
+                    number_document_ids |= bitmaps.union();
                     Ok(())
                 },
                 &|_i, (_field_id, _level, left, _right)| *left,
@@ -318,7 +318,7 @@ fn compute_facet_number_levels<'t>(
             .range(rtxn, &(level_0_start..))?
             .take(first_level_size)
             .map(|result| result.map(|(_key, docids)| docids))
-            .or()?;
+            .union()?;
 
         Ok((vec![], documents_ids))
     }
@@ -391,7 +391,7 @@ fn compute_facet_strings_levels<'t>(
             .range(rtxn, &(level_0_start..))?
             .take(first_level_size)
             .map(|result| result.map(|(_key, (_original_value, docids))| docids))
-            .or()?;
+            .union()?;
 
         Ok((vec![], documents_ids))
     }

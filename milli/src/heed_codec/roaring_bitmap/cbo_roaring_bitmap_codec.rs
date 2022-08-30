@@ -3,7 +3,7 @@ use std::io;
 use std::mem::size_of;
 
 use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 
 /// This is the limit where using a byteorder became less size efficient
 /// than using a direct roaring encoding, it is also the point where we are able
@@ -93,7 +93,7 @@ impl CboRoaringBitmapCodec {
         } else {
             let bitmap = RoaringBitmap::from_sorted_iter(u32_buffer.iter().copied()).unwrap();
             let buffer: &mut Vec<u8> = unsafe { convert_vec(u32_buffer) };
-            let bitmap = bitmaps.into_iter().chain(std::iter::once(bitmap)).or();
+            let bitmap = bitmaps.into_iter().chain(std::iter::once(bitmap)).union();
             buffer.clear();
             bitmap.serialize_into(buffer)?;
         }

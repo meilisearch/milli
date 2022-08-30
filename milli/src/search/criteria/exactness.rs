@@ -3,7 +3,7 @@ use std::mem::take;
 
 use itertools::Itertools;
 use log::debug;
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 
 use crate::search::criteria::{
     resolve_query_tree, Context, Criterion, CriterionParameters, CriterionResult,
@@ -186,9 +186,9 @@ fn resolve_state(
                         let mut attribute_candidates_array =
                             attribute_start_with_docids(ctx, id, query)?;
                         attribute_candidates_array.push(attribute_allowed_docids?);
-                        Ok(attribute_candidates_array.into_iter().and())
+                        Ok(attribute_candidates_array.into_iter().intersection())
                     })
-                    .or()?;
+                    .union()?;
 
                 // only keep allowed candidates
                 candidates &= &allowed_candidates;
@@ -205,8 +205,8 @@ fn resolve_state(
 
             let mut candidates = attributes_ids
                 .into_iter()
-                .map(|id| attribute_start_with_docids(ctx, id, query).map(IterExt::and))
-                .or()?;
+                .map(|id| attribute_start_with_docids(ctx, id, query).map(MultiOps::intersection))
+                .union()?;
 
             // only keep allowed candidates
             candidates &= &allowed_candidates;
@@ -226,7 +226,7 @@ fn resolve_state(
                         let tmp = synonyms
                             .into_iter()
                             .filter_map(|synonym| ctx.word_docids(synonym).transpose())
-                            .or()?;
+                            .union()?;
 
                         candidates |= tmp;
                     }
@@ -238,7 +238,7 @@ fn resolve_state(
                                 ctx.word_pair_proximity_docids(&words[0], &words[1], 0)
                                     .map(|o| o.unwrap_or_default())
                             })
-                            .and()?;
+                            .intersection()?;
 
                         candidates |= bitmaps;
                     }
@@ -249,7 +249,7 @@ fn resolve_state(
             let mut candidates_array = Vec::new();
 
             // compute documents that contain all exact words.
-            let mut all_exact_candidates = parts_candidates_array.iter().and();
+            let mut all_exact_candidates = parts_candidates_array.iter().intersection();
             all_exact_candidates &= &allowed_candidates;
             allowed_candidates -= &all_exact_candidates;
 
@@ -260,9 +260,9 @@ fn resolve_state(
                     // create all `c_count` combinations of exact words
                     .combinations(c_count)
                     // intersect each word candidates in combinations
-                    .map(IterExt::and)
+                    .map(MultiOps::intersection)
                     // union combinations of `c_count` exact words
-                    .or();
+                    .union();
                 // only keep allowed candidates
                 combinations_candidates &= &allowed_candidates;
                 // remove current candidates from allowed candidates
@@ -304,7 +304,7 @@ fn attribute_start_with_docids(
                 let synonyms_candidates = synonyms
                     .into_iter()
                     .filter_map(|word| ctx.word_position_docids(word, pos).transpose())
-                    .or()?;
+                    .union()?;
                 attribute_candidates_array.push(synonyms_candidates);
                 pos += 1;
             }

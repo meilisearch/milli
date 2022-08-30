@@ -6,7 +6,7 @@ use either::Either;
 pub use filter_parser::{Condition, Error as FPError, FilterCondition, Span, Token};
 use heed::types::DecodeIgnore;
 use log::debug;
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 
 use super::FacetNumberRange;
 use crate::error::{Error, UserError};
@@ -375,7 +375,7 @@ impl<'a> Filter<'a> {
                                     &Condition::Equal(el.clone()),
                                 )
                             })
-                            .or()?;
+                            .union()?;
 
                         Ok(bitmap)
                     } else {
@@ -421,11 +421,11 @@ impl<'a> Filter<'a> {
             FilterCondition::Or(subfilters) => subfilters
                 .into_iter()
                 .map(|f| Self::inner_evaluate(&(f.clone()).into(), rtxn, index, filterable_fields))
-                .or(),
+                .union(),
             FilterCondition::And(subfilters) => subfilters
                 .into_iter()
                 .map(|f| Self::inner_evaluate(&(f.clone()).into(), rtxn, index, filterable_fields))
-                .and(),
+                .intersection(),
             FilterCondition::GeoLowerThan { point, radius } => {
                 if filterable_fields.contains("_geo") {
                     let base_point: [f64; 2] = [point[0].parse()?, point[1].parse()?];

@@ -3,7 +3,7 @@ use std::collections::hash_map::HashMap;
 use std::mem::take;
 
 use log::debug;
-use roaring::{IterExt, RoaringBitmap};
+use roaring::{MultiOps, RoaringBitmap};
 
 use super::{
     query_docids, query_pair_proximity_docids, resolve_phrase, resolve_query_tree, Context,
@@ -263,7 +263,7 @@ fn resolve_candidates<'t>(
                             output.push((
                                 ll.clone(),
                                 rr.clone(),
-                                [&candidates, lcandidates, rcandidates].and(),
+                                [&candidates, lcandidates, rcandidates].intersection(),
                             ));
                         }
                     }
@@ -318,7 +318,7 @@ fn resolve_candidates<'t>(
     let candidates = resolve_operation(ctx, query_tree, proximity, cache, wdcache)?
         .into_iter()
         .map(|(_, _, cds)| cds)
-        .or();
+        .union();
 
     Ok(candidates)
 }
