@@ -3,7 +3,7 @@ use std::collections::hash_map::HashMap;
 use std::mem::take;
 
 use log::debug;
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 
 use super::{
     query_docids, query_pair_proximity_docids, resolve_phrase, resolve_query_tree, Context,
@@ -257,17 +257,14 @@ fn resolve_candidates<'t>(
 
                 for (ll, lr, lcandidates) in lefts {
                     for (rl, rr, rcandidates) in rights {
-                        let mut candidates =
+                        let candidates =
                             query_pair_proximity_docids(ctx, lr, rl, pair_p + 1, wdcache)?;
-                        if lcandidates.len() < rcandidates.len() {
-                            candidates &= lcandidates;
-                            candidates &= rcandidates;
-                        } else {
-                            candidates &= rcandidates;
-                            candidates &= lcandidates;
-                        }
                         if !candidates.is_empty() {
-                            output.push((ll.clone(), rr.clone(), candidates));
+                            output.push((
+                                ll.clone(),
+                                rr.clone(),
+                                [&candidates, lcandidates, rcandidates].intersection(),
+                            ));
                         }
                     }
                 }
@@ -318,10 +315,11 @@ fn resolve_candidates<'t>(
         }
     }
 
-    let mut candidates = RoaringBitmap::new();
-    for (_, _, cds) in resolve_operation(ctx, query_tree, proximity, cache, wdcache)? {
-        candidates |= cds;
-    }
+    let candidates = resolve_operation(ctx, query_tree, proximity, cache, wdcache)?
+        .into_iter()
+        .map(|(_, _, cds)| cds)
+        .union();
+
     Ok(candidates)
 }
 

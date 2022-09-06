@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io;
 use std::result::Result as StdResult;
 
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 
 use super::read_u32_ne_bytes;
 use crate::heed_codec::facet::{decode_prefix_string, encode_prefix_string};
@@ -41,8 +41,7 @@ pub fn merge_roaring_bitmaps<'a>(_key: &[u8], values: &[Cow<'a, [u8]>]) -> Resul
             .map(AsRef::as_ref)
             .map(RoaringBitmap::deserialize_from)
             .map(StdResult::unwrap)
-            .reduce(|a, b| a | b)
-            .unwrap();
+            .union();
         let mut buffer = Vec::new();
         serialize_roaring_bitmap(&merged, &mut buffer)?;
         Ok(Cow::Owned(buffer))
@@ -65,8 +64,7 @@ pub fn keep_first_prefix_value_merge_roaring_bitmaps<'a>(
             .map(|(_, bitmap_bytes)| bitmap_bytes)
             .map(RoaringBitmap::deserialize_from)
             .map(StdResult::unwrap)
-            .reduce(|a, b| a | b)
-            .unwrap();
+            .union();
 
         let cap = std::mem::size_of::<u16>() + original.len() + merged_bitmaps.serialized_size();
         let mut buffer = Vec::with_capacity(cap);

@@ -3,7 +3,7 @@ use std::io;
 use std::mem::size_of;
 
 use byteorder::{NativeEndian, ReadBytesExt, WriteBytesExt};
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 
 /// This is the limit where using a byteorder became less size efficient
 /// than using a direct roaring encoding, it is also the point where we are able
@@ -54,45 +54,69 @@ impl CboRoaringBitmapCodec {
     }
 
     /// Merge serialized CboRoaringBitmaps in a buffer.
+    /// The buffer MUST BE empty.
     ///
     /// if the merged values length is under the threshold, values are directly
     /// serialized in the buffer else a RoaringBitmap is created from the
     /// values and is serialized in the buffer.
     pub fn merge_into(slices: &[Cow<[u8]>], buffer: &mut Vec<u8>) -> io::Result<()> {
-        let mut roaring = RoaringBitmap::new();
-        let mut vec = Vec::new();
+        debug_assert!(buffer.len() == 0);
 
-        for bytes in slices {
-            if bytes.len() <= THRESHOLD * size_of::<u32>() {
-                let mut reader = bytes.as_ref();
-                while let Ok(integer) = reader.read_u32::<NativeEndian>() {
-                    vec.push(integer);
+        let bitmaps = slices
+            .iter()
+            .filter_map(|slice| {
+                if slice.len() <= THRESHOLD * size_of::<u32>() {
+                    buffer.extend(slice.as_ref());
+                    None
+                } else {
+                    RoaringBitmap::deserialize_from(slice.as_ref()).into()
                 }
-            } else {
-                roaring |= RoaringBitmap::deserialize_from(bytes.as_ref())?;
-            }
-        }
+            })
+            .collect::<io::Result<Vec<_>>>()?;
 
-        if roaring.is_empty() {
-            vec.sort_unstable();
-            vec.dedup();
+        let u32_buffer: &mut Vec<u32> = unsafe { convert_vec(buffer) };
+        u32_buffer.sort_unstable();
+        u32_buffer.dedup();
 
-            if vec.len() <= THRESHOLD {
-                for integer in vec {
-                    buffer.extend_from_slice(&integer.to_ne_bytes());
-                }
-            } else {
-                // We can unwrap safely because the vector is sorted upper.
-                let roaring = RoaringBitmap::from_sorted_iter(vec.into_iter()).unwrap();
+        if bitmaps.is_empty() {
+            if u32_buffer.len() > THRESHOLD {
+                // We can unwrap safely because the vector is sorted above.
+                let roaring = RoaringBitmap::from_sorted_iter(u32_buffer.iter().copied()).unwrap();
+
+                let buffer: &mut Vec<u8> = unsafe { convert_vec(u32_buffer) };
+                buffer.clear();
                 roaring.serialize_into(buffer)?;
+            } else {
+                // we still need to fix the size of the buffer
+                let _buffer: &mut Vec<u8> = unsafe { convert_vec(u32_buffer) };
             }
         } else {
-            roaring.extend(vec);
-            roaring.serialize_into(buffer)?;
+            let bitmap = RoaringBitmap::from_sorted_iter(u32_buffer.iter().copied()).unwrap();
+            let buffer: &mut Vec<u8> = unsafe { convert_vec(u32_buffer) };
+            let bitmap = bitmaps.into_iter().chain(std::iter::once(bitmap)).union();
+            buffer.clear();
+            bitmap.serialize_into(buffer)?;
         }
 
         Ok(())
     }
+}
+
+/// Convert a `Vec` of `T` into a `Vec` of `U` by keeping the same allocation and
+/// only updating the size of the `Vec`.
+/// To make this works `size_of::<T>() * input.len() % size_of::<U>()` must be equal to zero.
+unsafe fn convert_vec<T, U>(input: &mut Vec<T>) -> &mut Vec<U> {
+    debug_assert!(
+        size_of::<T>() * input.len() % size_of::<U>() == 0,
+        "called with incompatible types"
+    );
+
+    let new_len = size_of::<T>() * input.len() / size_of::<U>();
+
+    let ret: &mut Vec<U> = std::mem::transmute(input);
+    ret.set_len(new_len);
+
+    ret
 }
 
 impl heed::BytesDecode<'_> for CboRoaringBitmapCodec {
@@ -182,5 +206,53 @@ mod tests {
         let bitmap = CboRoaringBitmapCodec::deserialize_from(&buffer).unwrap();
         let expected = RoaringBitmap::from_sorted_iter(0..23).unwrap();
         assert_eq!(bitmap, expected);
+    }
+
+    #[cfg(feature = "nightly")]
+    mod bench {
+        extern crate test;
+        use test::Bencher;
+
+        #[bench]
+        fn bench_small_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
+            #[rustfmt::skip]
+        let inputs = [
+            vec![Cow::Owned(vec![255, 56, 14, 0]),  Cow::Owned(vec![196, 43, 14, 0])],
+            vec![Cow::Owned(vec![63, 101, 3, 0]),   Cow::Owned(vec![71, 136, 3, 0])],
+            vec![Cow::Owned(vec![68, 108, 0, 0]),   Cow::Owned(vec![85, 104, 0, 0]), Cow::Owned(vec![204, 103, 0, 0])],
+            vec![Cow::Owned(vec![199, 101, 7, 0]),  Cow::Owned(vec![94, 42, 7, 0])],
+            vec![Cow::Owned(vec![173, 219, 12, 0]), Cow::Owned(vec![146, 3, 13, 0])],
+            vec![Cow::Owned(vec![13, 152, 3, 0]),   Cow::Owned(vec![64, 120, 3, 0])],
+            vec![Cow::Owned(vec![109, 253, 13, 0]), Cow::Owned(vec![108, 232, 13, 0])],
+            vec![Cow::Owned(vec![73, 176, 3, 0]),   Cow::Owned(vec![126, 167, 3, 0])],
+        ];
+
+            let mut vec = Vec::new();
+            for input in inputs {
+                bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
+                vec.clear();
+            }
+        }
+
+        #[bench]
+        fn bench_medium_merge_cbo_roaring_bitmaps(bencher: &mut Bencher) {
+            #[rustfmt::skip]
+        let inputs = [
+            vec![Cow::Owned(vec![232, 35, 9, 0]), Cow::Owned(vec![192, 10, 9, 0]), Cow::Owned(vec![91, 33, 9, 0]), Cow::Owned(vec![204, 29, 9, 0])],
+            vec![Cow::Owned(vec![144, 39, 9, 0]), Cow::Owned(vec![162, 66, 9, 0]), Cow::Owned(vec![146, 11, 9, 0]), Cow::Owned(vec![174, 61, 9, 0])],
+            vec![Cow::Owned(vec![83, 70, 7, 0]), Cow::Owned(vec![115, 72, 7, 0]), Cow::Owned(vec![219, 54, 7, 0]), Cow::Owned(vec![1, 93, 7, 0]), Cow::Owned(vec![195, 77, 7, 0]), Cow::Owned(vec![21, 86, 7, 0])],
+            vec![Cow::Owned(vec![244, 112, 0, 0]), Cow::Owned(vec![48, 126, 0, 0]), Cow::Owned(vec![72, 142, 0, 0]), Cow::Owned(vec![255, 113, 0, 0]), Cow::Owned(vec![101, 114, 0, 0]), Cow::Owned(vec![66, 88, 0, 0]), Cow::Owned(vec![84, 92, 0, 0]), Cow::Owned(vec![194, 137, 0, 0]), Cow::Owned(vec![208, 132, 0, 0])],
+            vec![Cow::Owned(vec![8, 57, 7, 0]), Cow::Owned(vec![133, 115, 7, 0]), Cow::Owned(vec![219, 94, 7, 0]), Cow::Owned(vec![46, 95, 7, 0]), Cow::Owned(vec![156, 111, 7, 0]), Cow::Owned(vec![63, 107, 7, 0]), Cow::Owned(vec![31, 47, 7, 0])],
+            vec![Cow::Owned(vec![165, 78, 0, 0]), Cow::Owned(vec![197, 95, 0, 0]), Cow::Owned(vec![194, 82, 0, 0]), Cow::Owned(vec![142, 91, 0, 0]), Cow::Owned(vec![120, 94, 0, 0])],
+            vec![Cow::Owned(vec![185, 187, 13, 0]), Cow::Owned(vec![41, 187, 13, 0]), Cow::Owned(vec![245, 223, 13, 0]), Cow::Owned(vec![211, 251, 13, 0]), Cow::Owned(vec![192, 193, 13, 0]), Cow::Owned(vec![215, 230, 13, 0]), Cow::Owned(vec![252, 207, 13, 0]), Cow::Owned(vec![131, 213, 13, 0]), Cow::Owned(vec![219, 187, 13, 0]), Cow::Owned(vec![105, 236, 13, 0]), Cow::Owned(vec![30, 239, 13, 0]), Cow::Owned(vec![13, 200, 13, 0]), Cow::Owned(vec![111, 197, 13, 0]), Cow::Owned(vec![87, 222, 13, 0]), Cow::Owned(vec![7, 205, 13, 0]), Cow::Owned(vec![90, 211, 13, 0])],
+            vec![Cow::Owned(vec![215, 253, 13, 0]), Cow::Owned(vec![225, 194, 13, 0]), Cow::Owned(vec![37, 189, 13, 0]), Cow::Owned(vec![242, 212, 13, 0])],
+        ];
+
+            let mut vec = Vec::new();
+            for input in inputs {
+                bencher.iter(|| CboRoaringBitmapCodec::merge_into(&input, &mut vec));
+                vec.clear();
+            }
+        }
     }
 }

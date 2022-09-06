@@ -132,7 +132,7 @@ use grenad::{CompressionType, Reader, Writer};
 use heed::types::{ByteSlice, DecodeIgnore};
 use heed::{BytesDecode, BytesEncode, Error};
 use log::debug;
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 use time::OffsetDateTime;
 
 use crate::error::InternalError;
@@ -301,9 +301,7 @@ fn compute_facet_number_levels<'t>(
                 first_level_size,
                 level_group_size,
                 &mut |bitmaps, _, _| {
-                    for bitmap in bitmaps {
-                        number_document_ids |= bitmap;
-                    }
+                    number_document_ids |= bitmaps.union();
                     Ok(())
                 },
                 &|_i, (_field_id, _level, left, _right)| *left,
@@ -316,11 +314,11 @@ fn compute_facet_number_levels<'t>(
 
         Ok((subwriters, number_document_ids))
     } else {
-        let mut documents_ids = RoaringBitmap::new();
-        for result in db.range(rtxn, &(level_0_start..))?.take(first_level_size) {
-            let (_key, docids) = result?;
-            documents_ids |= docids;
-        }
+        let documents_ids = db
+            .range(rtxn, &(level_0_start..))?
+            .take(first_level_size)
+            .map(|result| result.map(|(_key, docids)| docids))
+            .union()?;
 
         Ok((vec![], documents_ids))
     }
@@ -389,11 +387,11 @@ fn compute_facet_strings_levels<'t>(
 
         Ok((subwriters, strings_document_ids))
     } else {
-        let mut documents_ids = RoaringBitmap::new();
-        for result in db.range(rtxn, &(level_0_start..))?.take(first_level_size) {
-            let (_key, (_original_value, docids)) = result?;
-            documents_ids |= docids;
-        }
+        let documents_ids = db
+            .range(rtxn, &(level_0_start..))?
+            .take(first_level_size)
+            .map(|result| result.map(|(_key, (_original_value, docids))| docids))
+            .union()?;
 
         Ok((vec![], documents_ids))
     }

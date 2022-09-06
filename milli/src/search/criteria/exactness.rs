@@ -1,10 +1,9 @@
 use std::convert::TryFrom;
 use std::mem::take;
-use std::ops::BitOr;
 
 use itertools::Itertools;
 use log::debug;
-use roaring::RoaringBitmap;
+use roaring::{MultiOps, RoaringBitmap};
 
 use crate::search::criteria::{
     resolve_query_tree, Context, Criterion, CriterionParameters, CriterionResult,
@@ -173,35 +172,41 @@ fn resolve_state(
     use State::*;
     match state {
         ExactAttribute(mut allowed_candidates) => {
-            let mut candidates = RoaringBitmap::new();
             if let Ok(query_len) = u8::try_from(query.len()) {
                 let attributes_ids = ctx.searchable_fields_ids()?;
-                for id in attributes_ids {
-                    if let Some(attribute_allowed_docids) =
-                        ctx.field_id_word_count_docids(id, query_len)?
-                    {
+
+                let mut candidates = attributes_ids
+                    .into_iter()
+                    .filter_map(|id| {
+                        ctx.field_id_word_count_docids(id, query_len)
+                            .transpose()
+                            .map(|res| (id, res))
+                    })
+                    .map(|(id, attribute_allowed_docids)| -> Result<_> {
                         let mut attribute_candidates_array =
                             attribute_start_with_docids(ctx, id, query)?;
-                        attribute_candidates_array.push(attribute_allowed_docids);
-                        candidates |= intersection_of(attribute_candidates_array.iter().collect());
-                    }
-                }
+                        attribute_candidates_array.push(attribute_allowed_docids?);
+                        Ok(attribute_candidates_array.into_iter().intersection())
+                    })
+                    .union()?;
 
                 // only keep allowed candidates
                 candidates &= &allowed_candidates;
                 // remove current candidates from allowed candidates
                 allowed_candidates -= &candidates;
-            }
 
-            Ok((candidates, Some(AttributeStartsWith(allowed_candidates))))
+                Ok((candidates, Some(AttributeStartsWith(allowed_candidates))))
+            } else {
+                Ok((RoaringBitmap::new(), Some(AttributeStartsWith(allowed_candidates))))
+            }
         }
         AttributeStartsWith(mut allowed_candidates) => {
-            let mut candidates = RoaringBitmap::new();
             let attributes_ids = ctx.searchable_fields_ids()?;
-            for id in attributes_ids {
-                let attribute_candidates_array = attribute_start_with_docids(ctx, id, query)?;
-                candidates |= intersection_of(attribute_candidates_array.iter().collect());
-            }
+
+            let mut candidates = attributes_ids
+                .into_iter()
+                .map(|id| attribute_start_with_docids(ctx, id, query).map(MultiOps::intersection))
+                .union()?;
 
             // only keep allowed candidates
             candidates &= &allowed_candidates;
@@ -218,27 +223,24 @@ fn resolve_state(
                 use ExactQueryPart::*;
                 match part {
                     Synonyms(synonyms) => {
-                        for synonym in synonyms {
-                            if let Some(synonym_candidates) = ctx.word_docids(synonym)? {
-                                candidates |= synonym_candidates;
-                            }
-                        }
+                        let tmp = synonyms
+                            .into_iter()
+                            .filter_map(|synonym| ctx.word_docids(synonym).transpose())
+                            .union()?;
+
+                        candidates |= tmp;
                     }
                     // compute intersection on pair of words with a proximity of 0.
                     Phrase(phrase) => {
-                        let mut bitmaps = Vec::with_capacity(phrase.len().saturating_sub(1));
-                        for words in phrase.windows(2) {
-                            if let [left, right] = words {
-                                match ctx.word_pair_proximity_docids(left, right, 0)? {
-                                    Some(docids) => bitmaps.push(docids),
-                                    None => {
-                                        bitmaps.clear();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        candidates |= intersection_of(bitmaps.iter().collect());
+                        let bitmaps = phrase
+                            .windows(2)
+                            .map(|words| {
+                                ctx.word_pair_proximity_docids(&words[0], &words[1], 0)
+                                    .map(|o| o.unwrap_or_default())
+                            })
+                            .intersection()?;
+
+                        candidates |= bitmaps;
                     }
                 }
                 parts_candidates_array.push(candidates);
@@ -247,7 +249,7 @@ fn resolve_state(
             let mut candidates_array = Vec::new();
 
             // compute documents that contain all exact words.
-            let mut all_exact_candidates = intersection_of(parts_candidates_array.iter().collect());
+            let mut all_exact_candidates = parts_candidates_array.iter().intersection();
             all_exact_candidates &= &allowed_candidates;
             allowed_candidates -= &all_exact_candidates;
 
@@ -258,9 +260,9 @@ fn resolve_state(
                     // create all `c_count` combinations of exact words
                     .combinations(c_count)
                     // intersect each word candidates in combinations
-                    .map(intersection_of)
+                    .map(MultiOps::intersection)
                     // union combinations of `c_count` exact words
-                    .fold(RoaringBitmap::new(), RoaringBitmap::bitor);
+                    .union();
                 // only keep allowed candidates
                 combinations_candidates &= &allowed_candidates;
                 // remove current candidates from allowed candidates
@@ -299,13 +301,10 @@ fn attribute_start_with_docids(
         use ExactQueryPart::*;
         match part {
             Synonyms(synonyms) => {
-                let mut synonyms_candidates = RoaringBitmap::new();
-                for word in synonyms {
-                    let wc = ctx.word_position_docids(word, pos)?;
-                    if let Some(word_candidates) = wc {
-                        synonyms_candidates |= word_candidates;
-                    }
-                }
+                let synonyms_candidates = synonyms
+                    .into_iter()
+                    .filter_map(|word| ctx.word_position_docids(word, pos).transpose())
+                    .union()?;
                 attribute_candidates_array.push(synonyms_candidates);
                 pos += 1;
             }
@@ -322,15 +321,6 @@ fn attribute_start_with_docids(
     }
 
     Ok(attribute_candidates_array)
-}
-
-fn intersection_of(mut rbs: Vec<&RoaringBitmap>) -> RoaringBitmap {
-    rbs.sort_unstable_by_key(|rb| rb.len());
-    let mut iter = rbs.into_iter();
-    match iter.next() {
-        Some(first) => iter.fold(first.clone(), |acc, rb| acc & rb),
-        None => RoaringBitmap::new(),
-    }
 }
 
 #[derive(Debug, Clone)]

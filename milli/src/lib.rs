@@ -1,3 +1,5 @@
+#![cfg_attr(feature = "nightly", feature(test))]
+
 #[macro_use]
 pub mod documents;
 
