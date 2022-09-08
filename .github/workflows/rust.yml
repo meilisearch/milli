@@ -19,6 +19,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-20.04, macos-latest, windows-latest]
+    # if: github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'pull_request' && ${{ matrix.os }} == 'ubuntu-20.04')
+    if: github.event_name == 'schedule' || github.event_name == 'push'
     steps:
     - uses: actions/checkout@v3
     - name: Run test with Rust nightly
@@ -29,7 +31,6 @@ jobs:
         toolchain: nightly
         override: true
     - name: Run test with Rust stable
-      if: github.event_name == 'schedule' || github.event_name == 'push' || (github.event_name == 'pull_request' && ${{ matrix.os }} == 'ubuntu-20.04')
       uses: actions-rs/toolchain@v1
       with:
         profile: minimal
