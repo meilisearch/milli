@@ -58,6 +58,7 @@ pub enum ExpectedValueKind {
 pub enum ErrorKind<'a> {
     ReservedGeo(&'a str),
     Geo,
+    GeoBoundingBox,
     MisusedGeo,
     InvalidPrimary,
     ExpectedEof,
@@ -151,7 +152,10 @@ impl<'a> Display for Error<'a> {
             }
             ErrorKind::Geo => {
                 writeln!(f, "The `_geoRadius` filter expects three arguments: `_geoRadius(latitude, longitude, radius)`.")?
-            }
+            },
+            ErrorKind::GeoBoundingBox => {
+                writeln!(f, "The `_geoBoundingBox` filter expects two points arguments: `_geoBoundingBox({{ latitude, longitude }}, {{ latitude, longitude }})`.")?
+            },
             ErrorKind::ReservedGeo(name) => {
                 writeln!(f, "`{}` is a reserved keyword and thus can't be used as a filter expression. Use the `_geoRadius(latitude, longitude, distance) built-in rule to filter on `_geo` coordinates.", name.escape_debug())?
             }

@@ -18,6 +18,7 @@
 //! doubleQuoted   = "\"" .* all but double quotes "\""
 //! word           = (alphanumeric | _ | - | .)+
 //! geoRadius      = "_geoRadius(" WS* float WS* "," WS* float WS* "," float WS* ")"
+//! geoBoundingBox = "_geoBoundingBox(" WS* "{" WS* float WS* "," WS* float WS* "}" WS* "," WS* "{" WS* float WS* "," WS* float WS* "}" WS* ")"
 //! ```
 //!
 //! Other BNF grammar used to handle some specific errors:
@@ -56,7 +57,7 @@ use nom::character::complete::{char, multispace0};
 use nom::combinator::{cut, eof, map, opt};
 use nom::multi::{many0, separated_list1};
 use nom::number::complete::recognize_float;
-use nom::sequence::{delimited, preceded, terminated, tuple};
+use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
 use nom::Finish;
 use nom_locate::LocatedSpan;
 pub(crate) use value::parse_value;
@@ -123,6 +124,7 @@ pub enum FilterCondition<'a> {
     Or(Vec<Self>),
     And(Vec<Self>),
     GeoLowerThan { point: [Token<'a>; 2], radius: Token<'a> },
+    GeoBoundingBox { top_left: [Token<'a>; 2], bottom_right: [Token<'a>; 2] },
 }
 
 impl<'a> FilterCondition<'a> {
@@ -330,6 +332,39 @@ fn parse_geo_point(input: Span) -> IResult<FilterCondition> {
     Err(nom::Err::Failure(Error::new_from_kind(input, ErrorKind::ReservedGeo("_geoPoint"))))
 }
 
+/// geoBoundingBox = "_geoBoundingBox(" WS* "{" WS* float WS* "," WS* float WS* "}" WS* "," WS* "{" WS* float WS* "," WS* float WS* "}" WS* ")"
+fn parse_geo_bounding_box(input: Span) -> IResult<FilterCondition> {
+    let parsed = preceded(
+        tuple((multispace0, word_exact("_geoBoundingBox"))),
+        cut(delimited(
+            char('('),
+            separated_pair(
+                delimited(
+                    ws(char('{')),
+                    separated_pair(ws(recognize_float), char(','), ws(recognize_float)),
+                    ws(char('}')),
+                ),
+                ws(char(',')),
+                delimited(
+                    ws(char('{')),
+                    separated_pair(ws(recognize_float), char(','), ws(recognize_float)),
+                    ws(char('}')),
+                ),
+            ),
+            char(')'),
+        )),
+    )(input)
+    .map_err(|e| e.map(|_| Error::new_from_kind(input, ErrorKind::GeoBoundingBox)));
+
+    let (input, args) = parsed?;
+    let res = FilterCondition::GeoBoundingBox {
+        top_left: [args.0 .0.into(), args.0 .1.into()],
+        bottom_right: [args.1 .0.into(), args.1 .1.into()],
+    };
+
+    Ok((input, res))
+}
+
 fn parse_error_reserved_keyword(input: Span) -> IResult<FilterCondition> {
     match parse_condition(input) {
         Ok(result) => Ok(result),
@@ -360,6 +395,7 @@ fn parse_primary(input: Span, depth: usize) -> IResult<FilterCondition> {
             }),
         ),
         parse_geo_radius,
+        parse_geo_bounding_box,
         parse_in,
         parse_not_in,
         parse_condition,
@@ -700,6 +736,13 @@ impl<'a> std::fmt::Display for FilterCondition<'a> {
             }
             FilterCondition::GeoLowerThan { point, radius } => {
                 write!(f, "_geoRadius({}, {}, {})", point[0], point[1], radius)
+            }
+            FilterCondition::GeoBoundingBox { top_left, bottom_right } => {
+                write!(
+                    f,
+                    "_geoBoundingBox({{{}, {}}}, {{{}, {}}})",
+                    top_left[0], top_left[1], bottom_right[0], bottom_right[1]
+                )
             }
         }
     }
