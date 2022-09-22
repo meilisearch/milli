@@ -134,7 +134,7 @@ macro_rules! db_snap {
             }
         });
     };
-    ($index:ident, $db_name:ident, $name:literal, @$inline:literal) => {
+    ($index:ident, $db_name:ident, $name:expr, @$inline:literal) => {
         let settings = $crate::snapshot_tests::default_db_snapshot_settings_for_test(Some(&format!("{}", $name)));
         settings.bind(|| {
             let snap = $crate::full_snap_of_db!($index, $db_name);
@@ -228,6 +228,12 @@ pub fn snap_facet_id_f64_docids(index: &Index) -> String {
         b,
     )| {
         &format!("{facet_id:<3} {level:<2} {left:<6} {right:<6} {}", display_bitmap(&b))
+    });
+    snap
+}
+pub fn snap_facet_id_exists_docids(index: &Index) -> String {
+    let snap = make_db_snap_from_iter!(index, facet_id_exists_docids, |(facet_id, docids)| {
+        &format!("{facet_id:<3} {}", display_bitmap(&docids))
     });
     snap
 }
@@ -441,6 +447,9 @@ macro_rules! full_snap_of_db {
     }};
     ($index:ident, facet_id_string_docids) => {{
         $crate::snapshot_tests::snap_facet_id_string_docids(&$index)
+    }};
+    ($index:ident, facet_id_exists_docids) => {{
+        $crate::snapshot_tests::snap_facet_id_exists_docids(&$index)
     }};
     ($index:ident, documents_ids) => {{
         $crate::snapshot_tests::snap_documents_ids(&$index)
