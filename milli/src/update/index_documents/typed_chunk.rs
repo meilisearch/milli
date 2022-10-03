@@ -234,7 +234,7 @@ pub(crate) fn write_typed_chunk_into_index(
     Ok((RoaringBitmap::new(), is_merged_database))
 }
 
-fn merge_word_docids_reader_into_fst(
+pub fn merge_word_docids_reader_into_fst(
     word_docids_iter: grenad::Reader<io::Cursor<ClonableMmap>>,
     exact_word_docids_iter: grenad::Reader<io::Cursor<ClonableMmap>>,
 ) -> Result<fst::Set<Vec<u8>>> {
@@ -251,14 +251,18 @@ fn merge_word_docids_reader_into_fst(
     Ok(builder.into_set())
 }
 
-fn merge_roaring_bitmaps(new_value: &[u8], db_value: &[u8], buffer: &mut Vec<u8>) -> Result<()> {
+pub fn merge_roaring_bitmaps(
+    new_value: &[u8],
+    db_value: &[u8],
+    buffer: &mut Vec<u8>,
+) -> Result<()> {
     let new_value = RoaringBitmap::deserialize_from(new_value)?;
     let db_value = RoaringBitmap::deserialize_from(db_value)?;
     let value = new_value | db_value;
     Ok(serialize_roaring_bitmap(&value, buffer)?)
 }
 
-fn merge_cbo_roaring_bitmaps(
+pub fn merge_cbo_roaring_bitmaps(
     new_value: &[u8],
     db_value: &[u8],
     buffer: &mut Vec<u8>,
@@ -271,7 +275,7 @@ fn merge_cbo_roaring_bitmaps(
 
 /// Write provided entries in database using serialize_value function.
 /// merge_values function is used if an entry already exist in the database.
-fn write_entries_into_database<R, K, V, FS, FM>(
+pub fn write_entries_into_database<R, K, V, FS, FM>(
     data: grenad::Reader<R>,
     database: &heed::Database<K, V>,
     wtxn: &mut RwTxn,
@@ -313,7 +317,7 @@ where
 /// merge_values function is used if an entry already exist in the database.
 /// All provided entries must be ordered.
 /// If the index is not empty, write_entries_into_database is called instead.
-fn append_entries_into_database<R, K, V, FS, FM>(
+pub fn append_entries_into_database<R, K, V, FS, FM>(
     data: grenad::Reader<R>,
     database: &heed::Database<K, V>,
     wtxn: &mut RwTxn,
