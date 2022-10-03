@@ -300,7 +300,7 @@ where
             grenad_params: pool_params,
         };
         let extracted_data = extract2::extract_data(
-            self.indexer_config.max_memory.unwrap_or(4_000_000_000),
+            self.indexer_config.max_memory.unwrap_or(8_000_000_000),
             8,
             unsafe { as_cloneable_grenad(&flattened_documents)? },
             context,

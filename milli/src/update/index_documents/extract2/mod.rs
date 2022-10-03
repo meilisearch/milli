@@ -450,6 +450,8 @@ pub struct MergedExtractedData {
 }
 impl MergedExtractedData {
     pub fn new(extracted: Vec<ExtractedData>, indexer: GrenadParameters) -> Result<Self> {
+        // could multithread this as well?
+        // but probablu useless since most will be taken by word pair proximity
         let mut word_position_docids = vec![];
         let mut word_pair_proximity_docids = vec![];
         let mut docid_word_positions = vec![];
@@ -480,8 +482,14 @@ impl MergedExtractedData {
 
         let word_position_docids =
             word_position_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
+        let start = std::time::Instant::now();
+        for x in word_pair_proximity_docids.iter() {
+            println!("len: {}", x.len());
+        }
         let word_pair_proximity_docids =
             word_pair_proximity_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
+        println!("elapsed: {}", start.elapsed().as_millis());
+        println!("total len: {}", word_pair_proximity_docids.len());
         let docid_word_positions = docid_word_positions.merge(concat_u32s_array, &indexer)?;
         let word_docids = word_docids.merge(merge_roaring_bitmaps, &indexer)?;
         let exact_word_docids = exact_word_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;

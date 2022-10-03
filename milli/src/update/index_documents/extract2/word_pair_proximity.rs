@@ -32,24 +32,7 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
                     // for each word1, word2 pair, add it to the hashmap
                     // then dequeue the word1
                     for (word2, pos2) in self.window.iter().skip(1) {
-                        key.extend_from_slice(word1);
-                        key.push(0);
-                        key.extend_from_slice(word2);
-                        key.push(0);
-                        let distance = pos2 - pos1;
-                        let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
-                        *prox = std::cmp::min(*prox, distance as u8);
-                        let w1 = std::str::from_utf8(word1).unwrap();
-                        let w2 = std::str::from_utf8(word2).unwrap();
-                        println!("{w1} {w2} {prox}");
-
-                        key.extend_from_slice(word2);
-                        key.push(0);
-                        key.extend_from_slice(word1);
-                        key.push(0);
-                        let distance = pos2 - pos1 + 1;
-                        let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
-                        *prox = std::cmp::min(*prox, distance as u8);
+                        insert_in_batch(&word1, &word2, *pos1, *pos2, &mut key, &mut self.batch);
                     }
                     self.window.remove(0);
                 }
@@ -68,25 +51,7 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
             // for each word1, word2 pair, add it to the hashmap
             // then dequeue the word1
             for (word2, pos2) in self.window.iter().skip(1) {
-                key.clear();
-
-                key.extend_from_slice(word1);
-                key.push(0);
-                key.extend_from_slice(word2);
-                key.push(0);
-                let distance = pos2 - pos1;
-                let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
-                *prox = std::cmp::min(*prox, distance as u8);
-
-                key.clear();
-
-                key.extend_from_slice(word2);
-                key.push(0);
-                key.extend_from_slice(word1);
-                key.push(0);
-                let distance = pos2 - pos1 + 1;
-                let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
-                *prox = std::cmp::min(*prox, distance as u8);
+                insert_in_batch(&word1, &word2, *pos1, *pos2, &mut key, &mut self.batch);
             }
             self.window.remove(0);
         }
@@ -99,4 +64,37 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
         }
         Ok(())
     }
+}
+fn insert_in_batch(
+    word1: &[u8],
+    word2: &[u8],
+    pos1: u32,
+    pos2: u32,
+    key: &mut Vec<u8>,
+    batch: &mut HashMap<Vec<u8>, u8>,
+) {
+    key.clear();
+
+    key.extend_from_slice(word1);
+    key.push(0);
+    key.extend_from_slice(word2);
+    key.push(0);
+    let distance = pos2 - pos1;
+    let prox = batch.entry(key.clone()).or_insert(u8::MAX);
+    *prox = std::cmp::min(*prox, distance as u8);
+    assert!(*prox <= 7);
+    key.clear();
+
+    if *prox == 7 {
+        return;
+    }
+
+    key.extend_from_slice(word2);
+    key.push(0);
+    key.extend_from_slice(word1);
+    key.push(0);
+    let distance = pos2 - pos1 + 1;
+    let prox = batch.entry(key.clone()).or_insert(u8::MAX);
+    *prox = std::cmp::min(*prox, distance as u8);
+    assert!(*prox <= 7);
 }
