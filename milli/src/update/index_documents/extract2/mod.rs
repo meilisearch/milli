@@ -340,6 +340,7 @@ impl ExtractingData {
                 fid_docid_facet_values_extractor.extract_from_field_id(field_id, value)?;
             }
         }
+        word_pair_proximity_extractor.finish_docid()?;
         Ok(())
     }
 }

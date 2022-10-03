@@ -11,8 +11,6 @@ impl<'out> FidWordCountDocids<'out> {
         Self { docid, key_buffer: vec![], sorter }
     }
 
-    pub fn enter_fid(&mut self, fid: u16) {}
-
     pub fn extract_from_fid_and_word_count(&mut self, fid: u16, word_count: u32) -> Result<()> {
         if word_count <= 10 {
             self.key_buffer.clear();
@@ -22,15 +20,5 @@ impl<'out> FidWordCountDocids<'out> {
             self.sorter.insert(&self.key_buffer, self.docid.to_ne_bytes())?;
         }
         Ok(())
-    }
-    pub fn finish_fid(&mut self) {}
-
-    fn finish_docid(&mut self) {}
-}
-
-// To make sure we don't forget to call finish_docid?
-impl<'out> Drop for FidWordCountDocids<'out> {
-    fn drop(&mut self) {
-        self.finish_docid();
     }
 }

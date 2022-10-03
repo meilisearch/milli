@@ -1,21 +1,17 @@
 use crate::{
-    error::GeoError,
-    update::index_documents::{extract_finite_float_from_value, MergeFn},
-    FieldId, InternalError, Result,
+    error::GeoError, update::index_documents::extract_finite_float_from_value, FieldId,
+    InternalError, Result,
 };
 use concat_arrays::concat_arrays;
-use grenad::Sorter;
 use obkv::KvReader;
 use serde_json::Value;
-use std::{collections::HashMap, fs::File};
+use std::fs::File;
 
 pub struct GeoPointsExtractor<'out> {
     docid: u32,
     primary_key_fid: u16,
     lat_fid: u16,
     lng_fid: u16,
-    key_buffer: Vec<u8>,
-    value_buffer: Vec<u8>,
     writer: &'out mut grenad::Writer<File>,
 }
 impl<'out> GeoPointsExtractor<'out> {
@@ -26,15 +22,7 @@ impl<'out> GeoPointsExtractor<'out> {
         lng_fid: u16,
         writer: &'out mut grenad::Writer<File>,
     ) -> Self {
-        Self {
-            docid,
-            key_buffer: vec![],
-            value_buffer: vec![],
-            primary_key_fid,
-            lat_fid,
-            lng_fid,
-            writer,
-        }
+        Self { docid, primary_key_fid, lat_fid, lng_fid, writer }
     }
 
     pub fn extract_from_obkv(&mut self, obkv: KvReader<FieldId>) -> Result<()> {

@@ -45,8 +45,6 @@ impl<'out> FidDocIdFacetValuesExtractor<'out> {
         }
     }
 
-    pub fn enter_fid(&mut self, fid: u16) {}
-
     pub fn extract_from_field_id(&mut self, fid: u16, value: serde_json::Value) -> Result<()> {
         // self.key_buffer availabsle
         // let mut value_buffer = vec![];
@@ -97,17 +95,6 @@ impl<'out> FidDocIdFacetValuesExtractor<'out> {
         }
 
         Ok(())
-    }
-
-    pub fn finish_fid(&mut self) {}
-
-    fn finish_docid(&mut self) {}
-}
-
-// To make sure we don't forget to call finish_docid?
-impl<'out> Drop for FidDocIdFacetValuesExtractor<'out> {
-    fn drop(&mut self) {
-        self.finish_docid();
     }
 }
 

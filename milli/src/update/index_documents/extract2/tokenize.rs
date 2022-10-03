@@ -1,13 +1,10 @@
-use std::{convert::TryInto, mem};
-
-use charabia::{SeparatorKind, Token, TokenKind, Tokenizer};
-
+use super::Context;
 use crate::{
     absolute_from_relative_position, update::index_documents::helpers::MAX_WORD_LENGTH, Result,
     SerializationError,
 };
-
-use super::Context;
+use charabia::{SeparatorKind, Token, TokenKind, Tokenizer};
+use std::convert::TryInto;
 
 // TODO: make it clear that it returns absolute positions
 pub fn tokenize(

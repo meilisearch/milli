@@ -10,8 +10,6 @@ use roaring::RoaringBitmap;
 use super::{docid_word_positions::DocidWordPositionsExtractor, Context};
 
 pub struct WordDocidsExtractor<'out> {
-    docid: u32,
-    key_buffer: Vec<u8>,
     value_buffer: Vec<u8>,
     word_docids_sorter: &'out mut Sorter<MergeFn>,
     exact_word_docids_sorter: &'out mut Sorter<MergeFn>,
@@ -27,8 +25,6 @@ impl<'out> WordDocidsExtractor<'out> {
         serialize_roaring_bitmap(&bitmap, &mut value_buffer)?;
 
         Ok(Self {
-            docid,
-            key_buffer: vec![],
             value_buffer,
             word_docids_sorter: words_sorter,
             exact_word_docids_sorter: exact_words_sorter,

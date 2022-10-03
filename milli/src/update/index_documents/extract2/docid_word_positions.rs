@@ -21,8 +21,6 @@ impl<'out> DocidWordPositionsExtractor<'out> {
         }
     }
 
-    pub fn enter_fid(&mut self, fid: u16) {}
-
     pub fn extract_from_token_and_position(&mut self, token: &[u8], position: u32) -> Result<()> {
         let positions = self.word_positions.entry(token.to_vec()).or_default();
         positions.push(position);
@@ -46,14 +44,5 @@ impl<'out> DocidWordPositionsExtractor<'out> {
         }
         word_positions.clear();
         Ok(())
-    }
-
-    fn finish_docid(&mut self) {}
-}
-
-// To make sure we don't forget to call finish_docid?
-impl<'out> Drop for DocidWordPositionsExtractor<'out> {
-    fn drop(&mut self) {
-        self.finish_docid();
     }
 }

@@ -157,15 +157,6 @@ impl Default for GrenadParameters {
     }
 }
 
-impl GrenadParameters {
-    /// This function use the number of threads in the current threadpool to compute the value.
-    /// This should be called inside of a rayon thread pool,
-    /// Otherwise, it will take the global number of threads.
-    pub fn max_memory_by_thread(&self) -> Option<usize> {
-        self.max_memory.map(|max_memory| max_memory / rayon::current_num_threads())
-    }
-}
-
 pub fn write_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
     database: heed::PolyDatabase,

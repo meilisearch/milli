@@ -5,8 +5,6 @@ use grenad::Sorter;
 
 pub struct WordPairProximityDocidsExtractor<'out> {
     docid: u32,
-    key_buffer: Vec<u8>,
-    value_buffer: Vec<u8>,
     sorter: &'out mut Sorter<MergeFn>,
     // (word1, position) followed by (word2, position)
     window: Vec<(Vec<u8>, u32)>,
@@ -17,8 +15,6 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
     pub fn new(docid: u32, sorter: &'out mut Sorter<MergeFn>) -> Self {
         Self {
             docid,
-            key_buffer: vec![],
-            value_buffer: vec![],
             sorter,
             window: vec![],
             batch: HashMap::default(), // TODO: use better hash function
@@ -61,7 +57,7 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
         }
     }
 
-    fn finish_docid(&mut self) -> Result<()> {
+    pub fn finish_docid(&mut self) -> Result<()> {
         let mut key_buffer = vec![];
         for (key, prox) in self.batch.iter() {
             key_buffer.clear();
