@@ -39,6 +39,9 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
                         let distance = pos2 - pos1;
                         let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
                         *prox = std::cmp::min(*prox, distance as u8);
+                        let w1 = std::str::from_utf8(word1).unwrap();
+                        let w2 = std::str::from_utf8(word2).unwrap();
+                        println!("{w1} {w2} {prox}");
 
                         key.extend_from_slice(word2);
                         key.push(0);
@@ -51,6 +54,8 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
                     self.window.remove(0);
                 }
             } else {
+                // let w = std::str::from_utf8(token).unwrap();
+                // println!("push {w} at pos {position}");
                 self.window.push((token.to_owned(), position));
                 return Ok(());
             }
@@ -58,6 +63,33 @@ impl<'out> WordPairProximityDocidsExtractor<'out> {
     }
 
     pub fn finish_docid(&mut self) -> Result<()> {
+        while let Some((word1, pos1)) = self.window.first() {
+            let mut key = vec![];
+            // for each word1, word2 pair, add it to the hashmap
+            // then dequeue the word1
+            for (word2, pos2) in self.window.iter().skip(1) {
+                key.clear();
+
+                key.extend_from_slice(word1);
+                key.push(0);
+                key.extend_from_slice(word2);
+                key.push(0);
+                let distance = pos2 - pos1;
+                let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
+                *prox = std::cmp::min(*prox, distance as u8);
+
+                key.clear();
+
+                key.extend_from_slice(word2);
+                key.push(0);
+                key.extend_from_slice(word1);
+                key.push(0);
+                let distance = pos2 - pos1 + 1;
+                let prox = self.batch.entry(key.clone()).or_insert(u8::MAX);
+                *prox = std::cmp::min(*prox, distance as u8);
+            }
+            self.window.remove(0);
+        }
         let mut key_buffer = vec![];
         for (key, prox) in self.batch.iter() {
             key_buffer.clear();
