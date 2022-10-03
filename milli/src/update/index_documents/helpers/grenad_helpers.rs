@@ -166,49 +166,6 @@ impl GrenadParameters {
     }
 }
 
-/// Returns an iterator that outputs grenad readers of obkv documents
-/// with a maximum size of approximately `documents_chunks_size`.
-///
-/// The grenad obkv entries are composed of an incremental document id big-endian
-/// encoded as the key and an obkv object with an `u8` for the field as the key
-/// and a simple UTF-8 encoded string as the value.
-pub fn grenad_obkv_into_chunks<R: io::Read + io::Seek>(
-    reader: grenad::Reader<R>,
-    indexer: GrenadParameters,
-    documents_chunk_size: usize,
-) -> Result<impl Iterator<Item = Result<grenad::Reader<File>>>> {
-    let mut continue_reading = true;
-    let mut cursor = reader.into_cursor()?;
-
-    let indexer_clone = indexer.clone();
-    let mut transposer = move || {
-        if !continue_reading {
-            return Ok(None);
-        }
-
-        let mut current_chunk_size = 0u64;
-        let mut obkv_documents = create_writer(
-            indexer_clone.chunk_compression_type,
-            indexer_clone.chunk_compression_level,
-            tempfile::tempfile()?,
-        );
-
-        while let Some((document_id, obkv)) = cursor.move_on_next()? {
-            obkv_documents.insert(document_id, obkv)?;
-            current_chunk_size += document_id.len() as u64 + obkv.len() as u64;
-
-            if current_chunk_size >= documents_chunk_size as u64 {
-                return writer_into_reader(obkv_documents).map(Some);
-            }
-        }
-
-        continue_reading = false;
-        writer_into_reader(obkv_documents).map(Some)
-    };
-
-    Ok(std::iter::from_fn(move || transposer().transpose()))
-}
-
 pub fn write_into_lmdb_database(
     wtxn: &mut heed::RwTxn,
     database: heed::PolyDatabase,
