@@ -63,15 +63,20 @@ where
 {
     cursor: grenad::ReaderCursor<R>,
     skip: usize,
+    first: bool,
 }
 impl<R> SkippingReaderCursor<R>
 where
     R: Read + Seek,
 {
     fn new(cursor: grenad::ReaderCursor<R>, skip: usize) -> Self {
-        Self { cursor, skip }
+        Self { cursor, skip, first: true }
     }
     fn next(&mut self) -> Option<(&[u8], &[u8])> {
+        if self.first {
+            self.first = false;
+            return self.cursor.move_on_next().unwrap();
+        }
         for _ in 0..self.skip {
             let _ = self.cursor.move_on_next().unwrap()?;
         }
@@ -174,8 +179,8 @@ impl ExtractingData {
         // lost track of memory usage from here
 
         let fid_docid_facet_exists = create_sorter(
-            grenad::SortAlgorithm::Stable,
-            keep_first,
+            grenad::SortAlgorithm::Unstable,
+            merge_cbo_roaring_bitmaps,
             grenad::CompressionType::None,
             None,
             None,
@@ -326,12 +331,12 @@ impl ExtractingData {
                         Ok(())
                     })?;
 
-                    docid_word_positions_extractor.finish_fid()?;
                     word_docids_extractor.extract_from_docid_word_positions_extractor(
                         field_id,
                         &docid_word_positions_extractor,
                         ctx,
                     )?;
+                    docid_word_positions_extractor.finish_fid()?;
                     fid_word_count_docids_extractor
                         .extract_from_fid_and_word_count(field_id, word_count)?;
                 }
@@ -473,7 +478,8 @@ impl MergedExtractedData {
             geo_points.push(data.geo_points);
         }
 
-        let word_position_docids = word_position_docids.merge(merge_roaring_bitmaps, &indexer)?;
+        let word_position_docids =
+            word_position_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
         let word_pair_proximity_docids =
             word_pair_proximity_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
         let docid_word_positions = docid_word_positions.merge(concat_u32s_array, &indexer)?;
@@ -481,7 +487,8 @@ impl MergedExtractedData {
         let exact_word_docids = exact_word_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
         let fid_word_count_docids =
             fid_word_count_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let fid_docid_facet_exists = fid_docid_facet_exists.merge(keep_first, &indexer)?;
+        let fid_docid_facet_exists =
+            fid_docid_facet_exists.merge(merge_cbo_roaring_bitmaps, &indexer)?;
         let fid_docid_facet_numbers = fid_docid_facet_numbers.merge(keep_first, &indexer)?;
         let fid_docid_facet_strings = fid_docid_facet_strings.merge(keep_first, &indexer)?;
         let facet_string_docids =

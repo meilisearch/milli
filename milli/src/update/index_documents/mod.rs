@@ -256,21 +256,6 @@ where
             }
             None => None,
         };
-        let mut new_documents_ids = RoaringBitmap::new();
-
-        // Add the original documents to the index
-        let mut cursor = original_documents.into_cursor()?;
-        while let Some((key, value)) = cursor.move_on_next()? {
-            let document_id = key
-                .try_into()
-                .map(u32::from_be_bytes)
-                .map_err(|_| SerializationError::InvalidNumberSerialization)?;
-            new_documents_ids.insert(document_id);
-            self.index
-                .documents
-                .remap_types::<ByteSlice, ByteSlice>()
-                .put(self.wtxn, key, value)?;
-        }
 
         let max_positions_per_attributes = self.indexer_config.max_positions_per_attributes;
 
@@ -283,6 +268,15 @@ where
             let deleted_documents_count = deletion_builder.execute()?;
             debug!("{} documents actually deleted", deleted_documents_count.deleted_documents);
         }
+        // Add the original documents to the index
+        let mut cursor = original_documents.into_cursor()?;
+        while let Some((key, value)) = cursor.move_on_next()? {
+            self.index
+                .documents
+                .remap_types::<ByteSlice, ByteSlice>()
+                .put(self.wtxn, key, value)?;
+        }
+
         let stop_words = self.index.stop_words(self.wtxn)?;
         let exact_attributes = self.index.exact_attributes_ids(self.wtxn)?;
 
@@ -306,7 +300,7 @@ where
             grenad_params: pool_params,
         };
         let extracted_data = extract2::extract_data(
-            self.indexer_config.max_memory.unwrap_or(usize::MAX),
+            self.indexer_config.max_memory.unwrap_or(4_000_000_000),
             8,
             unsafe { as_cloneable_grenad(&flattened_documents)? },
             context,
@@ -477,6 +471,7 @@ where
                 index_is_empty,
                 |value, _buffer| Ok(value),
                 |new_values, db_values, buffer| {
+                    println!("{new_values:?}");
                     let (_, new_values) = decode_prefix_string(new_values).unwrap();
                     let new_values = RoaringBitmap::deserialize_from(new_values)?;
                     let (db_original, db_values) = decode_prefix_string(db_values).unwrap();
