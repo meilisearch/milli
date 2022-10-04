@@ -471,7 +471,7 @@ where
                 index_is_empty,
                 |value, _buffer| Ok(value),
                 |new_values, db_values, buffer| {
-                    println!("{new_values:?}");
+                    // println!("{new_values:?}");
                     let (_, new_values) = decode_prefix_string(new_values).unwrap();
                     let new_values = RoaringBitmap::deserialize_from(new_values)?;
                     let (db_original, db_values) = decode_prefix_string(db_values).unwrap();

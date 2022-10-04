@@ -480,16 +480,42 @@ impl MergedExtractedData {
             geo_points.push(data.geo_points);
         }
 
-        let word_position_docids =
-            word_position_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let start = std::time::Instant::now();
-        for x in word_pair_proximity_docids.iter() {
-            println!("len: {}", x.len());
+        macro_rules! merge {
+            ($r:ident, $n:ident, $m:ident) => {
+                #[inline(never)]
+                fn $n(
+                    r: Vec<grenad::Reader<File>>,
+                    indexer: GrenadParameters,
+                ) -> Result<grenad::Reader<File>> {
+                    for x in r.iter() {
+                        println!("    len for {}: {}", stringify!($r), x.len());
+                    }
+                    r.merge($m, &indexer)
+                }
+                let start = std::time::Instant::now();
+                let $r = $n($r, indexer)?;
+                println!("elapsed for {}: {}", stringify!($r), start.elapsed().as_millis());
+                println!("Total len for {}: {}", stringify!($r), $r.len());
+            };
         }
-        let word_pair_proximity_docids =
-            word_pair_proximity_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        println!("elapsed: {}", start.elapsed().as_millis());
-        println!("total len: {}", word_pair_proximity_docids.len());
+
+        merge!(word_position_docids, word_position_docids_merge, merge_cbo_roaring_bitmaps);
+        merge!(
+            word_pair_proximity_docids,
+            word_pair_proximity_docids_merge,
+            merge_cbo_roaring_bitmaps
+        );
+
+        // let word_position_docids =
+        //     word_position_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
+        // let start = std::time::Instant::now();
+        // for x in word_pair_proximity_docids.iter() {
+        //     println!("len: {}", x.len());
+        // }
+        // let word_pair_proximity_docids =
+        //     word_pair_proximity_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
+        // println!("elapsed: {}", start.elapsed().as_millis());
+        // println!("total len: {}", word_pair_proximity_docids.len());
         let docid_word_positions = docid_word_positions.merge(concat_u32s_array, &indexer)?;
         let word_docids = word_docids.merge(merge_roaring_bitmaps, &indexer)?;
         let exact_word_docids = exact_word_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
