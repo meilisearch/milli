@@ -4,9 +4,10 @@ use super::helpers::{
     concat_u32s_array, create_sorter, keep_first, keep_first_prefix_value_merge_roaring_bitmaps,
     sorter_into_reader, GrenadParameters, MergeableReader,
 };
+use super::typed_chunk::TypedChunk;
 use super::{
-    create_writer, merge_cbo_roaring_bitmaps, merge_roaring_bitmaps, writer_into_reader,
-    ClonableMmap, MergeFn,
+    as_cloneable_grenad, create_writer, merge_cbo_roaring_bitmaps, merge_roaring_bitmaps,
+    writer_into_reader, ClonableMmap, MergeFn,
 };
 use crate::error::{InternalError, SerializationError};
 use crate::{FieldId, Result};
@@ -434,116 +435,119 @@ impl ExtractingData {
     }
 }
 
-pub struct MergedExtractedData {
-    pub word_position_docids: Reader<File>,
-    pub word_pair_proximity_docids: Reader<File>,
-    pub docid_word_positions: Reader<File>,
-    pub word_docids: Reader<File>,
-    pub exact_word_docids: Reader<File>,
-    pub fid_word_count_docids: Reader<File>,
-    pub fid_docid_facet_exists: Reader<File>,
-    pub fid_docid_facet_numbers: Reader<File>,
-    pub fid_docid_facet_strings: Reader<File>,
-    pub facet_string_docids: Reader<File>,
-    pub facet_numbers_docids: Reader<File>,
-    pub geo_points: Reader<File>,
-}
-impl MergedExtractedData {
-    pub fn new(extracted: Vec<ExtractedData>, indexer: GrenadParameters) -> Result<Self> {
-        // could multithread this as well?
-        // but probablu useless since most will be taken by word pair proximity
-        let mut word_position_docids = vec![];
-        let mut word_pair_proximity_docids = vec![];
-        let mut docid_word_positions = vec![];
-        let mut word_docids = vec![];
-        let mut exact_word_docids = vec![];
-        let mut fid_word_count_docids = vec![];
-        let mut fid_docid_facet_exists = vec![];
-        let mut fid_docid_facet_numbers = vec![];
-        let mut fid_docid_facet_strings = vec![];
-        let mut facet_string_docids = vec![];
-        let mut facet_numbers_docids = vec![];
-        let mut geo_points = vec![];
+pub(crate) fn merge_extracted_data(
+    data: Vec<ExtractedData>,
+    indexer: GrenadParameters,
+    sender: crossbeam_channel::Sender<Result<TypedChunk>>,
+) -> Result<()> {
+    let mut word_position_docids = vec![];
+    let mut word_pair_proximity_docids = vec![];
+    let mut docid_word_positions = vec![];
+    let mut word_docids = vec![];
+    let mut exact_word_docids = vec![];
+    let mut fid_word_count_docids = vec![];
+    let mut fid_docid_facet_exists = vec![];
+    let mut fid_docid_facet_numbers = vec![];
+    let mut fid_docid_facet_strings = vec![];
+    let mut facet_string_docids = vec![];
+    let mut facet_numbers_docids = vec![];
+    let mut geo_points = vec![];
 
-        for data in extracted {
-            word_position_docids.push(data.word_position_docids);
-            word_pair_proximity_docids.push(data.word_pair_proximity_docids);
-            docid_word_positions.push(data.docid_word_positions);
-            word_docids.push(data.word_docids);
-            exact_word_docids.push(data.exact_word_docids);
-            fid_word_count_docids.push(data.fid_word_count_docids);
-            fid_docid_facet_exists.push(data.fid_docid_facet_exists);
-            fid_docid_facet_numbers.push(data.fid_docid_facet_numbers);
-            fid_docid_facet_strings.push(data.fid_docid_facet_strings);
-            facet_string_docids.push(data.facet_string_docids);
-            facet_numbers_docids.push(data.facet_numbers_docids);
-            geo_points.push(data.geo_points);
-        }
-
-        macro_rules! merge {
-            ($r:ident, $n:ident, $m:ident) => {
-                #[inline(never)]
-                fn $n(
-                    r: Vec<grenad::Reader<File>>,
-                    indexer: GrenadParameters,
-                ) -> Result<grenad::Reader<File>> {
-                    for x in r.iter() {
-                        println!("    len for {}: {}", stringify!($r), x.len());
-                    }
-                    r.merge($m, &indexer)
-                }
-                let start = std::time::Instant::now();
-                let $r = $n($r, indexer)?;
-                println!("elapsed for {}: {}", stringify!($r), start.elapsed().as_millis());
-                println!("Total len for {}: {}", stringify!($r), $r.len());
-            };
-        }
-
-        merge!(word_position_docids, word_position_docids_merge, merge_cbo_roaring_bitmaps);
-        merge!(
-            word_pair_proximity_docids,
-            word_pair_proximity_docids_merge,
-            merge_cbo_roaring_bitmaps
-        );
-
-        // let word_position_docids =
-        //     word_position_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        // let start = std::time::Instant::now();
-        // for x in word_pair_proximity_docids.iter() {
-        //     println!("len: {}", x.len());
-        // }
-        // let word_pair_proximity_docids =
-        //     word_pair_proximity_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        // println!("elapsed: {}", start.elapsed().as_millis());
-        // println!("total len: {}", word_pair_proximity_docids.len());
-        let docid_word_positions = docid_word_positions.merge(concat_u32s_array, &indexer)?;
-        let word_docids = word_docids.merge(merge_roaring_bitmaps, &indexer)?;
-        let exact_word_docids = exact_word_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let fid_word_count_docids =
-            fid_word_count_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let fid_docid_facet_exists =
-            fid_docid_facet_exists.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let fid_docid_facet_numbers = fid_docid_facet_numbers.merge(keep_first, &indexer)?;
-        let fid_docid_facet_strings = fid_docid_facet_strings.merge(keep_first, &indexer)?;
-        let facet_string_docids =
-            facet_string_docids.merge(keep_first_prefix_value_merge_roaring_bitmaps, &indexer)?;
-        let facet_numbers_docids =
-            facet_numbers_docids.merge(merge_cbo_roaring_bitmaps, &indexer)?;
-        let geo_points = geo_points.merge(keep_first, &indexer)?;
-
-        Ok(Self {
-            word_position_docids,
-            word_pair_proximity_docids,
-            docid_word_positions,
-            word_docids,
-            exact_word_docids,
-            fid_word_count_docids,
-            fid_docid_facet_exists,
-            fid_docid_facet_numbers,
-            fid_docid_facet_strings,
-            facet_string_docids,
-            facet_numbers_docids,
-            geo_points,
-        })
+    for data in data {
+        word_position_docids.push(data.word_position_docids);
+        word_pair_proximity_docids.push(data.word_pair_proximity_docids);
+        docid_word_positions.push(data.docid_word_positions);
+        word_docids.push(data.word_docids);
+        exact_word_docids.push(data.exact_word_docids);
+        fid_word_count_docids.push(data.fid_word_count_docids);
+        fid_docid_facet_exists.push(data.fid_docid_facet_exists);
+        fid_docid_facet_numbers.push(data.fid_docid_facet_numbers);
+        fid_docid_facet_strings.push(data.fid_docid_facet_strings);
+        facet_string_docids.push(data.facet_string_docids);
+        facet_numbers_docids.push(data.facet_numbers_docids);
+        geo_points.push(data.geo_points);
     }
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = word_position_docids
+            .merge(merge_cbo_roaring_bitmaps, &indexer)
+            .map(TypedChunk::WordPositionDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = word_pair_proximity_docids
+            .merge(merge_cbo_roaring_bitmaps, &indexer)
+            .map(TypedChunk::WordPairProximityDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = docid_word_positions
+            .merge(concat_u32s_array, &indexer)
+            .map(|r| TypedChunk::DocidWordPositions(unsafe { as_cloneable_grenad(&r) }.unwrap()));
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || match word_docids.merge(merge_roaring_bitmaps, &indexer) {
+        Ok(word_docids) => match exact_word_docids.merge(merge_cbo_roaring_bitmaps, &indexer) {
+            Ok(exact_word_docids) => sx
+                .send(Ok(TypedChunk::WordDocids {
+                    word_docids_reader: word_docids,
+                    exact_word_docids_reader: exact_word_docids,
+                }))
+                .unwrap(),
+            Err(err) => sx.send(Err(err)).unwrap(),
+        },
+        Err(err) => sx.send(Err(err)).unwrap(),
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = fid_word_count_docids
+            .merge(merge_cbo_roaring_bitmaps, &indexer)
+            .map(TypedChunk::FieldIdWordcountDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = fid_docid_facet_exists
+            .merge(merge_cbo_roaring_bitmaps, &indexer)
+            .map(TypedChunk::FieldIdFacetExistsDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = fid_docid_facet_numbers.merge(keep_first, &indexer).map(|r| {
+            TypedChunk::FieldIdDocidFacetNumbers(unsafe { as_cloneable_grenad(&r) }.unwrap())
+        });
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = fid_docid_facet_strings.merge(keep_first, &indexer).map(|r| {
+            TypedChunk::FieldIdDocidFacetStrings(unsafe { as_cloneable_grenad(&r) }.unwrap())
+        });
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = facet_string_docids
+            .merge(keep_first_prefix_value_merge_roaring_bitmaps, &indexer)
+            .map(TypedChunk::FieldIdFacetStringDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = facet_numbers_docids
+            .merge(merge_cbo_roaring_bitmaps, &indexer)
+            .map(TypedChunk::FieldIdFacetNumberDocids);
+        sx.send(chunk).unwrap();
+    });
+    let sx = sender.clone();
+    std::thread::spawn(move || {
+        let chunk = geo_points.merge(keep_first, &indexer).map(TypedChunk::GeoPoints);
+        sx.send(chunk).unwrap();
+    });
+
+    Ok(())
 }

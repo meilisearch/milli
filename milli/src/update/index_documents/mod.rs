@@ -2,19 +2,16 @@ mod enrich;
 mod extract2;
 mod helpers;
 mod transform;
+mod typed_chunk;
 
-use grenad::MergerBuilder;
 use heed::types::{ByteSlice, Str};
 use heed::Database;
-use heed::{BytesDecode, RwTxn};
 use log::debug;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 use slice_group_by::GroupBy;
-use std::borrow::Cow;
 use std::collections::HashSet;
-use std::convert::TryInto;
-use std::io::{self, Cursor, Read, Seek};
+use std::io::{Cursor, Read, Seek};
 use std::iter::FromIterator;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::result::Result as StdResult;
@@ -24,29 +21,24 @@ pub use self::enrich::{
     extract_finite_float_from_value, validate_document_id, validate_document_id_value,
     validate_geo_from_json, DocumentId,
 };
-use self::extract2::MergedExtractedData;
+use self::extract2::merge_extracted_data;
+use self::helpers::GrenadParameters;
 pub use self::helpers::{
     as_cloneable_grenad, create_sorter, create_writer, fst_stream_into_hashset,
     fst_stream_into_vec, merge_cbo_roaring_bitmaps, merge_roaring_bitmaps,
     sorter_into_lmdb_database, valid_lmdb_key, write_into_lmdb_database, writer_into_reader,
     ClonableMmap, MergeFn,
 };
-use self::helpers::{
-    merge_ignore_values, roaring_bitmap_from_u32s_array, serialize_roaring_bitmap, GrenadParameters,
-};
 pub use self::transform::{Transform, TransformOutput};
+use self::typed_chunk::TypedChunk;
 use crate::documents::{obkv_to_object, DocumentsBatchReader};
 use crate::error::UserError;
-use crate::heed_codec::facet::{decode_prefix_string, encode_prefix_string};
 pub use crate::update::index_documents::helpers::CursorClonableMmap;
 use crate::update::{
     self, Facets, IndexerConfig, UpdateIndexingStep, WordPrefixDocids,
     WordPrefixPairProximityDocids, WordPrefixPositionDocids, WordsPrefixesFst,
 };
-use crate::{
-    lat_lng_to_xyz, BoRoaringBitmapCodec, CboRoaringBitmapCodec, GeoPoint, Index, Result,
-    RoaringBitmapCodec, SerializationError,
-};
+use crate::{Index, Result, RoaringBitmapCodec};
 
 static MERGED_DATABASE_COUNT: usize = 7;
 static PREFIX_DATABASE_COUNT: usize = 5;
@@ -306,205 +298,70 @@ where
             context,
         )?;
 
-        let MergedExtractedData {
-            word_position_docids,
-            word_pair_proximity_docids,
-            docid_word_positions,
-            word_docids,
-            exact_word_docids,
-            fid_word_count_docids,
-            fid_docid_facet_exists,
-            fid_docid_facet_numbers,
-            fid_docid_facet_strings,
-            facet_string_docids,
-            facet_numbers_docids,
-            geo_points,
-        } = MergedExtractedData::new(extracted_data, pool_params)?;
+        let mut word_pair_proximity_docids = None;
+        let mut word_position_docids = None;
+        let mut word_docids = None;
+        let mut exact_word_docids = None;
 
-        // These should be separate functions always
+        let mut final_documents_ids = RoaringBitmap::new();
+        let mut databases_seen = 0;
+        (self.progress)(UpdateIndexingStep::MergeDataIntoFinalDatabase {
+            databases_seen,
+            total_databases: TOTAL_POSTING_DATABASE_COUNT,
+        });
 
-        // DocIdWordPositions
-        {
-            write_entries_into_database(
-                docid_word_positions,
-                &self.index.docid_word_positions,
-                self.wtxn,
-                index_is_empty,
-                |value, buffer| {
-                    // ensure that values are unique and ordered
-                    let positions = roaring_bitmap_from_u32s_array(value);
-                    BoRoaringBitmapCodec::serialize_into(&positions, buffer);
-                    Ok(buffer)
-                },
-                |new_values, db_values, buffer| {
-                    let new_values = roaring_bitmap_from_u32s_array(new_values);
-                    let positions = match BoRoaringBitmapCodec::bytes_decode(db_values) {
-                        Some(db_values) => new_values | db_values,
-                        None => new_values, // should not happen
-                    };
-                    BoRoaringBitmapCodec::serialize_into(&positions, buffer);
-                    Ok(())
-                },
-            )?;
-        }
-        // Documents (already done earlier)
-        // FieldIdWordcountDocids
-        {
-            append_entries_into_database(
-                fid_word_count_docids,
-                &self.index.field_id_word_count_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_cbo_roaring_bitmaps_buffer,
-            )?;
-        }
-        // NewDocumentsIds (nothing to do)
-        // WordDocids
-        {
-            let word_docids = unsafe { as_cloneable_grenad(&word_docids) }?;
-            append_entries_into_database(
-                word_docids.clone(),
-                &self.index.word_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_roaring_bitmaps_buffer,
-            )?;
+        let (sx, rx) = crossbeam_channel::unbounded::<Result<TypedChunk>>();
+        merge_extracted_data(extracted_data, pool_params, sx.clone())?;
+        drop(sx);
 
-            let exact_word_docids = unsafe { as_cloneable_grenad(&exact_word_docids) }?;
-            append_entries_into_database(
-                exact_word_docids.clone(),
-                &self.index.exact_word_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_roaring_bitmaps_buffer,
-            )?;
-
-            // create fst from word docids
-            let fst = merge_word_docids_reader_into_fst(word_docids.clone(), exact_word_docids)?;
-            let db_fst = self.index.words_fst(self.wtxn)?;
-
-            // merge new fst with database fst
-            let union_stream = fst.op().add(db_fst.stream()).union();
-            let mut builder = fst::SetBuilder::memory();
-            builder.extend_stream(union_stream)?;
-            let fst = builder.into_set();
-            self.index.put_words_fst(self.wtxn, &fst)?;
-        }
-        let word_position_docids = unsafe { as_cloneable_grenad(&word_position_docids)? };
-        // WordPositionDocids
-        {
-            append_entries_into_database(
-                word_position_docids.clone(),
-                &self.index.word_position_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_cbo_roaring_bitmaps_buffer,
-            )?;
-        }
-        // FieldIdFacetNumberDocids
-        {
-            append_entries_into_database(
-                facet_numbers_docids, // TODO: rename to facet_id_f4_docids?
-                &self.index.facet_id_f64_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_cbo_roaring_bitmaps_buffer,
-            )?;
-        }
-        // FieldIdFacetExistsDocids
-        {
-            append_entries_into_database(
-                fid_docid_facet_exists, // wrong?
-                &self.index.facet_id_exists_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_cbo_roaring_bitmaps_buffer,
-            )?;
-        }
-        // WordPairProximityDocids
-        let word_pair_proximity_docids =
-            unsafe { as_cloneable_grenad(&word_pair_proximity_docids)? };
-        {
-            append_entries_into_database(
-                word_pair_proximity_docids.clone(),
-                &self.index.word_pair_proximity_docids,
-                self.wtxn,
-                index_is_empty,
-                |value, _buffer| Ok(value),
-                merge_cbo_roaring_bitmaps_buffer,
-            )?;
-        }
-        // FieldIdDocidFacetNumbers
-        {
-            let index_fid_docid_facet_numbers =
-                self.index.field_id_docid_facet_f64s.remap_types::<ByteSlice, ByteSlice>();
-            let mut cursor = fid_docid_facet_numbers.into_cursor()?;
-            while let Some((key, value)) = cursor.move_on_next()? {
-                if valid_lmdb_key(key) {
-                    index_fid_docid_facet_numbers.put(self.wtxn, key, &value)?;
+        for chunk in rx {
+            let chunk = match chunk? {
+                TypedChunk::WordDocids { word_docids_reader, exact_word_docids_reader } => {
+                    let cloneable_chunk = unsafe { as_cloneable_grenad(&word_docids_reader)? };
+                    word_docids = Some(cloneable_chunk);
+                    let cloneable_chunk =
+                        unsafe { as_cloneable_grenad(&exact_word_docids_reader)? };
+                    exact_word_docids = Some(cloneable_chunk);
+                    TypedChunk::WordDocids { word_docids_reader, exact_word_docids_reader }
                 }
-            }
-        }
-        // FieldIdDocidFacetStrings
-        {
-            let index_fid_docid_facet_strings =
-                self.index.field_id_docid_facet_strings.remap_types::<ByteSlice, ByteSlice>();
-            let mut cursor = fid_docid_facet_strings.into_cursor()?;
-            while let Some((key, value)) = cursor.move_on_next()? {
-                if valid_lmdb_key(key) {
-                    index_fid_docid_facet_strings.put(self.wtxn, key, &value)?;
+                TypedChunk::WordPairProximityDocids(chunk) => {
+                    let cloneable_chunk = unsafe { as_cloneable_grenad(&chunk)? };
+                    word_pair_proximity_docids = Some(cloneable_chunk);
+                    TypedChunk::WordPairProximityDocids(chunk)
                 }
-            }
-        }
-        // FieldIdFacetStringDocids
-        {
-            append_entries_into_database(
-                facet_string_docids,
-                &self.index.facet_id_string_docids,
+                TypedChunk::WordPositionDocids(chunk) => {
+                    let cloneable_chunk = unsafe { as_cloneable_grenad(&chunk)? };
+                    word_position_docids = Some(cloneable_chunk);
+                    TypedChunk::WordPositionDocids(chunk)
+                }
+                otherwise => otherwise,
+            };
+            let (docids, is_merged_database) = typed_chunk::write_typed_chunk_into_index(
+                chunk,
+                self.index,
                 self.wtxn,
                 index_is_empty,
-                |value, _buffer| Ok(value),
-                |new_values, db_values, buffer| {
-                    // println!("{new_values:?}");
-                    let (_, new_values) = decode_prefix_string(new_values).unwrap();
-                    let new_values = RoaringBitmap::deserialize_from(new_values)?;
-                    let (db_original, db_values) = decode_prefix_string(db_values).unwrap();
-                    let db_values = RoaringBitmap::deserialize_from(db_values)?;
-                    let values = new_values | db_values;
-                    encode_prefix_string(db_original, buffer)?;
-                    Ok(values.serialize_into(buffer)?)
-                },
             )?;
-        }
-        // GeoPoints
-        {
-            let mut rtree = self.index.geo_rtree(self.wtxn)?.unwrap_or_default();
-            let mut geo_faceted_docids = self.index.geo_faceted_documents_ids(self.wtxn)?;
-
-            let mut cursor = geo_points.into_cursor()?;
-            while let Some((key, value)) = cursor.move_on_next()? {
-                // convert the key back to a u32 (4 bytes)
-                let docid = key.try_into().map(u32::from_be_bytes).unwrap();
-
-                // convert the latitude and longitude back to a f64 (8 bytes)
-                let (lat, tail) = helpers::try_split_array_at::<u8, 8>(value).unwrap();
-                let (lng, _) = helpers::try_split_array_at::<u8, 8>(tail).unwrap();
-                let point = [f64::from_ne_bytes(lat), f64::from_ne_bytes(lng)];
-                let xyz_point = lat_lng_to_xyz(&point);
-
-                rtree.insert(GeoPoint::new(xyz_point, (docid, point)));
-                geo_faceted_docids.insert(docid);
+            if !docids.is_empty() {
+                final_documents_ids |= docids;
+                let documents_seen_count = final_documents_ids.len();
+                (self.progress)(UpdateIndexingStep::IndexDocuments {
+                    documents_seen: documents_seen_count as usize,
+                    total_documents: documents_count,
+                });
+                debug!(
+                    "We have seen {} documents on {} total document so far",
+                    documents_seen_count, documents_count
+                );
             }
-            self.index.put_geo_rtree(self.wtxn, &rtree)?;
-            self.index.put_geo_faceted_documents_ids(self.wtxn, &geo_faceted_docids)?;
+            if is_merged_database {
+                databases_seen += 1;
+                (self.progress)(UpdateIndexingStep::MergeDataIntoFinalDatabase {
+                    databases_seen,
+                    total_databases: TOTAL_POSTING_DATABASE_COUNT,
+                });
+            }
         }
-        // END of typed chunk replacement
 
         // We write the field distribution into the main database
         self.index.put_field_distribution(self.wtxn, &field_distribution)?;
@@ -519,10 +376,10 @@ where
         self.index.put_documents_ids(self.wtxn, &all_documents_ids)?;
 
         self.execute_prefix_databases(
-            unsafe { as_cloneable_grenad(&word_docids)? },
-            unsafe { as_cloneable_grenad(&exact_word_docids)? },
-            word_pair_proximity_docids,
-            word_position_docids,
+            word_docids.unwrap(),
+            exact_word_docids.unwrap(),
+            word_pair_proximity_docids.unwrap(),
+            word_position_docids.unwrap(),
         )?;
 
         Ok(all_documents_ids.len())
@@ -707,128 +564,6 @@ fn execute_word_prefix_docids(
         &common_prefix_fst_words,
         &del_prefix_fst_words,
     )?;
-    Ok(())
-}
-
-pub fn merge_word_docids_reader_into_fst(
-    word_docids_iter: grenad::Reader<io::Cursor<ClonableMmap>>,
-    exact_word_docids_iter: grenad::Reader<io::Cursor<ClonableMmap>>,
-) -> Result<fst::Set<Vec<u8>>> {
-    let mut merger_builder = MergerBuilder::new(merge_ignore_values as MergeFn);
-    merger_builder.push(word_docids_iter.into_cursor()?);
-    merger_builder.push(exact_word_docids_iter.into_cursor()?);
-    let mut iter = merger_builder.build().into_stream_merger_iter()?;
-    let mut builder = fst::SetBuilder::memory();
-
-    while let Some((k, _)) = iter.next()? {
-        builder.insert(k)?;
-    }
-
-    Ok(builder.into_set())
-}
-
-pub fn merge_roaring_bitmaps_buffer(
-    new_value: &[u8],
-    db_value: &[u8],
-    buffer: &mut Vec<u8>,
-) -> Result<()> {
-    let new_value = RoaringBitmap::deserialize_from(new_value)?;
-    let db_value = RoaringBitmap::deserialize_from(db_value)?;
-    let value = new_value | db_value;
-    Ok(serialize_roaring_bitmap(&value, buffer)?)
-}
-
-pub fn merge_cbo_roaring_bitmaps_buffer(
-    new_value: &[u8],
-    db_value: &[u8],
-    buffer: &mut Vec<u8>,
-) -> Result<()> {
-    Ok(CboRoaringBitmapCodec::merge_into(
-        &[Cow::Borrowed(db_value), Cow::Borrowed(new_value)],
-        buffer,
-    )?)
-}
-
-/// Write provided entries in database using serialize_value function.
-/// merge_values function is used if an entry already exist in the database.
-pub fn write_entries_into_database<R, K, V, FS, FM>(
-    data: grenad::Reader<R>,
-    database: &heed::Database<K, V>,
-    wtxn: &mut RwTxn,
-    index_is_empty: bool,
-    serialize_value: FS,
-    merge_values: FM,
-) -> Result<()>
-where
-    R: io::Read + io::Seek,
-    FS: for<'a> Fn(&'a [u8], &'a mut Vec<u8>) -> Result<&'a [u8]>,
-    FM: Fn(&[u8], &[u8], &mut Vec<u8>) -> Result<()>,
-{
-    let mut buffer = Vec::new();
-    let database = database.remap_types::<ByteSlice, ByteSlice>();
-
-    let mut cursor = data.into_cursor()?;
-    while let Some((key, value)) = cursor.move_on_next()? {
-        if valid_lmdb_key(key) {
-            buffer.clear();
-            let value = if index_is_empty {
-                serialize_value(value, &mut buffer)?
-            } else {
-                match database.get(wtxn, key)? {
-                    Some(prev_value) => {
-                        merge_values(value, prev_value, &mut buffer)?;
-                        &buffer[..]
-                    }
-                    None => serialize_value(value, &mut buffer)?,
-                }
-            };
-            database.put(wtxn, key, value)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Write provided entries in database using serialize_value function.
-/// merge_values function is used if an entry already exist in the database.
-/// All provided entries must be ordered.
-/// If the index is not empty, write_entries_into_database is called instead.
-pub fn append_entries_into_database<R, K, V, FS, FM>(
-    data: grenad::Reader<R>,
-    database: &heed::Database<K, V>,
-    wtxn: &mut RwTxn,
-    index_is_empty: bool,
-    serialize_value: FS,
-    merge_values: FM,
-) -> Result<()>
-where
-    R: io::Read + io::Seek,
-    FS: for<'a> Fn(&'a [u8], &'a mut Vec<u8>) -> Result<&'a [u8]>,
-    FM: Fn(&[u8], &[u8], &mut Vec<u8>) -> Result<()>,
-{
-    if !index_is_empty {
-        return write_entries_into_database(
-            data,
-            database,
-            wtxn,
-            false,
-            serialize_value,
-            merge_values,
-        );
-    }
-
-    let mut buffer = Vec::new();
-    let mut database = database.iter_mut(wtxn)?.remap_types::<ByteSlice, ByteSlice>();
-
-    let mut cursor = data.into_cursor()?;
-    while let Some((key, value)) = cursor.move_on_next()? {
-        if valid_lmdb_key(key) {
-            buffer.clear();
-            let value = serialize_value(value, &mut buffer)?;
-            unsafe { database.append(key, value)? };
-        }
-    }
-
     Ok(())
 }
 
