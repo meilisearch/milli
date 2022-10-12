@@ -185,6 +185,7 @@ impl<'t, 'u, 'i> DeleteDocuments<'t, 'u, 'i> {
             word_prefix_pair_proximity_docids,
             word_position_docids,
             word_prefix_position_docids,
+            script_language_docids,
             facet_id_f64_docids,
             facet_id_exists_docids,
             facet_id_string_docids,
