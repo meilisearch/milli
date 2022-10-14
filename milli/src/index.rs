@@ -143,7 +143,7 @@ impl Index {
     pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> Result<Index> {
         use db_name::*;
 
-        options.max_dbs(17);
+        options.max_dbs(18);
         unsafe { options.flag(Flags::MdbAlwaysFreePages) };
 
         let env = options.open(path)?;
