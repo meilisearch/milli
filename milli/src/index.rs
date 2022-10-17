@@ -40,12 +40,11 @@ pub mod main_key {
     pub const FIELDS_IDS_MAP_KEY: &str = "fields-ids-map";
     pub const GEO_FACETED_DOCUMENTS_IDS_KEY: &str = "geo-faceted-documents-ids";
     pub const GEO_RTREE_KEY: &str = "geo-rtree";
-    pub const HARD_EXTERNAL_DOCUMENTS_IDS_KEY: &str = "hard-external-documents-ids";
+    pub const EXTERNAL_DOCUMENTS_IDS_KEY: &str = "external-documents-ids";
     pub const NUMBER_FACETED_DOCUMENTS_IDS_PREFIX: &str = "number-faceted-documents-ids";
     pub const PRIMARY_KEY_KEY: &str = "primary-key";
     pub const SEARCHABLE_FIELDS_KEY: &str = "searchable-fields";
     pub const USER_DEFINED_SEARCHABLE_FIELDS_KEY: &str = "user-defined-searchable-fields";
-    pub const SOFT_EXTERNAL_DOCUMENTS_IDS_KEY: &str = "soft-external-documents-ids";
     pub const STOP_WORDS_KEY: &str = "stop-words";
     pub const STRING_FACETED_DOCUMENTS_IDS_PREFIX: &str = "string-faceted-documents-ids";
     pub const SYNONYMS_KEY: &str = "synonyms";
@@ -321,18 +320,12 @@ impl Index {
         wtxn: &mut RwTxn,
         external_documents_ids: &ExternalDocumentsIds<'a>,
     ) -> heed::Result<()> {
-        let ExternalDocumentsIds { hard, soft, .. } = external_documents_ids;
-        let hard = hard.as_fst().as_bytes();
-        let soft = soft.as_fst().as_bytes();
+        let ExternalDocumentsIds { docids, .. } = external_documents_ids;
+        let docids = docids.as_fst().as_bytes();
         self.main.put::<_, Str, ByteSlice>(
             wtxn,
-            main_key::HARD_EXTERNAL_DOCUMENTS_IDS_KEY,
-            hard,
-        )?;
-        self.main.put::<_, Str, ByteSlice>(
-            wtxn,
-            main_key::SOFT_EXTERNAL_DOCUMENTS_IDS_KEY,
-            soft,
+            main_key::EXTERNAL_DOCUMENTS_IDS_KEY,
+            docids,
         )?;
         Ok(())
     }
@@ -340,20 +333,16 @@ impl Index {
     /// Returns the external documents ids map which associate the external ids
     /// with the internal ids (i.e. `u32`).
     pub fn external_documents_ids<'t>(&self, rtxn: &'t RoTxn) -> Result<ExternalDocumentsIds<'t>> {
-        let hard =
-            self.main.get::<_, Str, ByteSlice>(rtxn, main_key::HARD_EXTERNAL_DOCUMENTS_IDS_KEY)?;
-        let soft =
-            self.main.get::<_, Str, ByteSlice>(rtxn, main_key::SOFT_EXTERNAL_DOCUMENTS_IDS_KEY)?;
-        let hard = match hard {
-            Some(hard) => fst::Map::new(hard)?.map_data(Cow::Borrowed)?,
+        let docids =
+            self.main.get::<_, Str, ByteSlice>(rtxn, main_key::EXTERNAL_DOCUMENTS_IDS_KEY)?;
+
+        let docids = match docids {
+            Some(docids) => fst::Map::new(docids)?.map_data(Cow::Borrowed)?,
             None => fst::Map::default().map_data(Cow::Owned)?,
         };
-        let soft = match soft {
-            Some(soft) => fst::Map::new(soft)?.map_data(Cow::Borrowed)?,
-            None => fst::Map::default().map_data(Cow::Owned)?,
-        };
+
         let soft_deleted_docids = self.soft_deleted_documents_ids(rtxn)?;
-        Ok(ExternalDocumentsIds::new(hard, soft, soft_deleted_docids))
+        Ok(ExternalDocumentsIds::new(docids, soft_deleted_docids))
     }
 
     /* fields ids map */

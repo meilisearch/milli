@@ -308,20 +308,14 @@ pub fn snap_geo_faceted_documents_ids(index: &Index) -> String {
 }
 pub fn snap_external_documents_ids(index: &Index) -> String {
     let rtxn = index.read_txn().unwrap();
-    let ExternalDocumentsIds { soft, hard, .. } = index.external_documents_ids(&rtxn).unwrap();
+    let ExternalDocumentsIds { docids, .. } = index.external_documents_ids(&rtxn).unwrap();
     let mut snap = String::new();
-    let soft_bytes = soft.into_fst().as_bytes().to_owned();
-    let mut hex_soft = String::new();
-    for byte in soft_bytes {
-        write!(&mut hex_soft, "{:x}", byte).unwrap();
+    let docids_bytes = docids.into_fst().as_bytes().to_owned();
+    let mut hex_docids = String::new();
+    for byte in docids_bytes {
+        write!(&mut hex_docids, "{:x}", byte).unwrap();
     }
-    writeln!(&mut snap, "soft: {hex_soft}").unwrap();
-    let hard_bytes = hard.into_fst().as_bytes().to_owned();
-    let mut hex_hard = String::new();
-    for byte in hard_bytes {
-        write!(&mut hex_hard, "{:x}", byte).unwrap();
-    }
-    writeln!(&mut snap, "hard: {hex_hard}").unwrap();
+    writeln!(&mut snap, "docids: {hex_docids}").unwrap();
     snap
 }
 pub fn snap_number_faceted_documents_ids(index: &Index) -> String {
