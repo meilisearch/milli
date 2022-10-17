@@ -322,11 +322,7 @@ impl Index {
     ) -> heed::Result<()> {
         let ExternalDocumentsIds { docids, .. } = external_documents_ids;
         let docids = docids.as_fst().as_bytes();
-        self.main.put::<_, Str, ByteSlice>(
-            wtxn,
-            main_key::EXTERNAL_DOCUMENTS_IDS_KEY,
-            docids,
-        )?;
+        self.main.put::<_, Str, ByteSlice>(wtxn, main_key::EXTERNAL_DOCUMENTS_IDS_KEY, docids)?;
         Ok(())
     }
 
