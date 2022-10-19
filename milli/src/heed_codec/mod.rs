@@ -4,6 +4,7 @@ mod field_id_word_count_codec;
 mod obkv_codec;
 mod roaring_bitmap;
 mod roaring_bitmap_length;
+mod script_language_codec;
 mod str_beu32_codec;
 mod str_str_u8_codec;
 
@@ -14,5 +15,6 @@ pub use self::roaring_bitmap::{BoRoaringBitmapCodec, CboRoaringBitmapCodec, Roar
 pub use self::roaring_bitmap_length::{
     BoRoaringBitmapLenCodec, CboRoaringBitmapLenCodec, RoaringBitmapLenCodec,
 };
+pub use self::script_language_codec::ScriptLanguageCodec;
 pub use self::str_beu32_codec::StrBEU32Codec;
 pub use self::str_str_u8_codec::{StrStrU8Codec, UncheckedStrStrU8Codec};
