@@ -1,5 +1,7 @@
 <p align="center">
+  <a href="https://www.meilisearch.com">
   <img alt="the milli logo" src="assets/logo-black.svg">
+  </a>
 </p>
 
 <p align="center">a concurrent indexer combined with fast and relevant search algorithms</p>
