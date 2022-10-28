@@ -72,7 +72,7 @@ const MAX_FILTER_DEPTH: usize = 200;
 #[derive(Debug, Clone, Eq)]
 pub struct Token<'a> {
     /// The token in the original input, it should be used when possible.
-    span: Span<'a>,
+    pub span: Span<'a>,
     /// If you need to modify the original input you can use the `value` field
     /// to store your modified input.
     value: Option<String>,
@@ -106,7 +106,7 @@ impl<'a> Token<'a> {
         T: FromStr,
         T::Err: std::error::Error,
     {
-        self.span.parse().map_err(|e| self.as_external_error(e))
+        self.value().parse().map_err(|e| self.as_external_error(e))
     }
 }
 
@@ -303,12 +303,12 @@ fn parse_geo_radius(input: Span) -> IResult<FilterCondition> {
         // if we were able to parse `_geoRadius` and can't parse the rest of the input we return a failure
         cut(delimited(char('('), separated_list1(tag(","), ws(recognize_float)), char(')'))),
     )(input)
-    .map_err(|e| e.map(|_| Error::new_from_kind(input, ErrorKind::Geo)));
+    .map_err(|e| e.map(|_| Error::new_from_kind(input, ErrorKind::GeoRadius)));
 
     let (input, args) = parsed?;
 
     if args.len() != 3 {
-        return Err(nom::Err::Failure(Error::new_from_kind(input, ErrorKind::Geo)));
+        return Err(nom::Err::Failure(Error::new_from_kind(input, ErrorKind::GeoRadius)));
     }
 
     let res = FilterCondition::GeoLowerThan {
@@ -345,12 +345,12 @@ fn parse_geo_bounding_box(input: Span) -> IResult<FilterCondition> {
             )
         ),
     )(input)
-    .map_err(|e| e.map(|_| Error::new_from_kind(input, ErrorKind::Geo)));
+    .map_err(|e| e.map(|_| Error::new_from_kind(input, ErrorKind::GeoBoundingBox)));
 
     let (input, args) = parsed?;
 
-    if args.len() != 2 {
-        return Err(nom::Err::Failure(Error::new_from_kind(input, ErrorKind::Geo)));
+    if args.len() != 2 || args[0].len() != 2 || args[1].len() != 2 {
+        return Err(nom::Err::Failure(Error::new_from_kind(input, ErrorKind::GeoBoundingBox)));
     }
 
     //TODO: Check sub array length
