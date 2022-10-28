@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::fs::File;
+use std::str::FromStr;
 use std::{io, mem, str};
 
 use charabia::{SeparatorKind, Token, TokenKind, TokenizerBuilder};
+use regex::Regex;
 use roaring::RoaringBitmap;
 use serde_json::Value;
+use uuid::Uuid;
 
 use super::helpers::{
     concat_u32s_array, create_sorter, sorter_into_reader, GrenadParameters, MAX_WORD_LENGTH,
@@ -26,6 +29,8 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
     stop_words: Option<&fst::Set<&[u8]>>,
     max_positions_per_attributes: Option<u32>,
 ) -> Result<(RoaringBitmap, grenad::Reader<File>)> {
+    // let url: Regex = Regex::new("^(https?://)?[0-9a-zA-Z]+.[-_0-9a-zA-Z]+.[0-9a-zA-Z]+$").unwrap();
+
     let max_positions_per_attributes = max_positions_per_attributes
         .map_or(MAX_POSITION_PER_ATTRIBUTE, |max| max.min(MAX_POSITION_PER_ATTRIBUTE));
     let max_memory = indexer.max_memory_by_thread();
@@ -66,6 +71,13 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
                     serde_json::from_slice(field_bytes).map_err(InternalError::SerdeJson)?;
                 field_buffer.clear();
                 if let Some(field) = json_to_string(&value, &mut field_buffer) {
+                    if field.starts_with("http")
+                        || field.parse::<f64>().is_ok()
+                        || Uuid::from_str(field).is_ok()
+                    {
+                        // println!("ignore {}", field);
+                        continue;
+                    }
                     let tokens = process_tokens(tokenizer.tokenize(field))
                         .take_while(|(p, _)| (*p as u32) < max_positions_per_attributes);
 

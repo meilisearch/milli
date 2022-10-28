@@ -48,6 +48,7 @@ itertools = "0.10.5"
 log = "0.4.17"
 logging_timer = "1.1.0"
 csv = "1.1.6"
+regex = "1.6.0"
 
 [dev-dependencies]
 big_s = "1.0.2"
@@ -60,7 +61,7 @@ rand = {version = "0.8.5", features = ["small_rng"] }
 fuzzcheck = "0.12.1"
 
 [features]
-default = [ "charabia/default" ]
+default = ["charabia/default"]
 
 # allow chinese specialized tokenization
 chinese = ["charabia/chinese"]
