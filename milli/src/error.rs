@@ -28,6 +28,8 @@ pub enum Error {
 pub enum InternalError {
     #[error("{}", HeedError::DatabaseClosing)]
     DatabaseClosing,
+    #[error("Database missing while opening index.")]
+    DatabaseMissing,
     #[error("Missing {} in the {db_name} database.", key.unwrap_or("key"))]
     DatabaseMissingEntry { db_name: &'static str, key: Option<&'static str> },
     #[error(transparent)]

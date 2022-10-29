@@ -230,6 +230,83 @@ impl Index {
         Ok(())
     }
 
+    pub fn open<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> Result<Index> {
+        use db_name::*;
+
+        options.max_dbs(18);
+        unsafe { options.flag(Flags::MdbAlwaysFreePages) };
+
+        let env = options.open(path)?;
+        let main = env.open_poly_database(Some(MAIN))?.ok_or(InternalError::DatabaseMissing)?;
+        let word_docids =
+            env.open_database(Some(WORD_DOCIDS))?.ok_or(InternalError::DatabaseMissing)?;
+        let exact_word_docids =
+            env.open_database(Some(EXACT_WORD_DOCIDS))?.ok_or(InternalError::DatabaseMissing)?;
+        let word_prefix_docids =
+            env.open_database(Some(WORD_PREFIX_DOCIDS))?.ok_or(InternalError::DatabaseMissing)?;
+        let exact_word_prefix_docids = env
+            .open_database(Some(EXACT_WORD_PREFIX_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let docid_word_positions =
+            env.open_database(Some(DOCID_WORD_POSITIONS))?.ok_or(InternalError::DatabaseMissing)?;
+        let word_pair_proximity_docids = env
+            .open_database(Some(WORD_PAIR_PROXIMITY_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let word_prefix_pair_proximity_docids = env
+            .open_database(Some(WORD_PREFIX_PAIR_PROXIMITY_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let prefix_word_pair_proximity_docids = env
+            .open_database(Some(PREFIX_WORD_PAIR_PROXIMITY_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let word_position_docids =
+            env.open_database(Some(WORD_POSITION_DOCIDS))?.ok_or(InternalError::DatabaseMissing)?;
+        let field_id_word_count_docids = env
+            .open_database(Some(FIELD_ID_WORD_COUNT_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let word_prefix_position_docids = env
+            .open_database(Some(WORD_PREFIX_POSITION_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let facet_id_f64_docids =
+            env.open_database(Some(FACET_ID_F64_DOCIDS))?.ok_or(InternalError::DatabaseMissing)?;
+        let facet_id_string_docids = env
+            .open_database(Some(FACET_ID_STRING_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let facet_id_exists_docids = env
+            .open_database(Some(FACET_ID_EXISTS_DOCIDS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+
+        let field_id_docid_facet_f64s = env
+            .open_database(Some(FIELD_ID_DOCID_FACET_F64S))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let field_id_docid_facet_strings = env
+            .open_database(Some(FIELD_ID_DOCID_FACET_STRINGS))?
+            .ok_or(InternalError::DatabaseMissing)?;
+        let documents =
+            env.open_database(Some(DOCUMENTS))?.ok_or(InternalError::DatabaseMissing)?;
+
+        Ok(Index {
+            env,
+            main,
+            word_docids,
+            exact_word_docids,
+            word_prefix_docids,
+            exact_word_prefix_docids,
+            docid_word_positions,
+            word_pair_proximity_docids,
+            word_prefix_pair_proximity_docids,
+            prefix_word_pair_proximity_docids,
+            word_position_docids,
+            word_prefix_position_docids,
+            field_id_word_count_docids,
+            facet_id_f64_docids,
+            facet_id_string_docids,
+            facet_id_exists_docids,
+            field_id_docid_facet_f64s,
+            field_id_docid_facet_strings,
+            documents,
+        })
+    }
+
     /// Create a write transaction to be able to write into the index.
     pub fn write_txn(&self) -> heed::Result<RwTxn> {
         self.env.write_txn()
