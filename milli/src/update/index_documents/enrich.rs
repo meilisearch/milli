@@ -346,17 +346,18 @@ pub fn validate_geo_from_json(id: &DocumentId, bytes: &[u8]) -> Result<StdResult
         Value::Object(mut object) => match (object.remove("lat"), object.remove("lng")) {
             (Some(lat), Some(lng)) => {
                 match (extract_finite_float_from_value(lat), extract_finite_float_from_value(lng)) {
-                    (Ok(_), Ok(_)) => Ok(Ok(())),
-                    (Err(value), Ok(_)) => Ok(Err(BadLatitude { document_id: debug_id(), value })),
-                    (Ok(_), Err(value)) => Ok(Err(BadLongitude { document_id: debug_id(), value })),
                     (Err(lat), Err(lng)) => {
                         Ok(Err(BadLatitudeAndLongitude { document_id: debug_id(), lat, lng }))
                     }
+                    (Ok(_), Ok(_)) => Ok(Ok(())),
+                    (Err(value), Ok(_)) => Ok(Err(BadLatitude { document_id: debug_id(), value })),
+                    (Ok(_), Err(value)) => Ok(Err(BadLongitude { document_id: debug_id(), value })),
                 }
             }
+            (None, None) => Ok(Err(MissingLatitudeAndLongitude { document_id: debug_id() })),
             (None, Some(_)) => Ok(Err(MissingLatitude { document_id: debug_id() })),
             (Some(_), None) => Ok(Err(MissingLongitude { document_id: debug_id() })),
-            (None, None) => Ok(Err(MissingLatitudeAndLongitude { document_id: debug_id() })),
+
         },
         value => Ok(Err(NotAnObject { document_id: debug_id(), value })),
     }
