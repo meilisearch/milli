@@ -8,7 +8,7 @@ res=$(curl -s https://milli-benchmarks.fra1.digitaloceanspaces.com | grep -o '<K
 
 for pattern in "$@"
 do
-	res=$(echo "$res" | grep $pattern)
+	res=$(echo "$res" | grep "$pattern")
 done
 
 echo "$res"
