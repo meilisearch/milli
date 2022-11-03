@@ -15,7 +15,7 @@ env:
 jobs:
   update-version-cargo-toml:
     name: Update version in Cargo.toml file
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1
