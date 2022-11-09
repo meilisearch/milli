@@ -4,7 +4,6 @@ use std::fs::File;
 use std::mem::size_of;
 use std::path::Path;
 
-use heed::flags::Flags;
 use heed::types::*;
 use heed::{CompactionOption, Database, PolyDatabase, RoTxn, RwTxn};
 use roaring::RoaringBitmap;
@@ -149,7 +148,6 @@ impl Index {
         use db_name::*;
 
         options.max_dbs(18);
-        unsafe { options.flag(Flags::MdbAlwaysFreePages) };
 
         let env = options.open(path)?;
         let main = env.create_poly_database(Some(MAIN))?;
