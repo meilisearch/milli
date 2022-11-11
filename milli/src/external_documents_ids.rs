@@ -7,8 +7,6 @@ use fst::map::IndexedValue;
 use fst::{IntoStreamer, Streamer};
 use roaring::RoaringBitmap;
 
-const DELETED_ID: u64 = u64::MAX;
-
 pub struct ExternalDocumentsIds<'a> {
     pub(crate) docids: fst::Map<Cow<'a, [u8]>>,
     soft_deleted_docids: RoaringBitmap,
@@ -37,7 +35,7 @@ impl<'a> ExternalDocumentsIds<'a> {
     pub fn get<A: AsRef<[u8]>>(&self, external_id: A) -> Option<u32> {
         let external_id = external_id.as_ref();
         match self.docids.get(external_id) {
-            Some(id) if id != DELETED_ID && !self.soft_deleted_docids.contains(id as u32) => {
+            Some(id) if !self.soft_deleted_docids.contains(id as u32) => {
                 Some(id.try_into().unwrap())
             }
             _otherwise => None,
@@ -49,22 +47,15 @@ impl<'a> ExternalDocumentsIds<'a> {
         let union_op = self.docids.op().add(&other).r#union();
 
         let mut iter = union_op.into_stream();
-        let mut new_soft_builder = fst::MapBuilder::memory();
+        let mut new_docids_builder = fst::MapBuilder::memory();
         while let Some((external_id, docids)) = iter.next() {
-            if docids.iter().any(|v| v.index == 1) {
-                // If the `other` set returns a value here it means
-                // that it must be marked as deleted.
-                new_soft_builder.insert(external_id, DELETED_ID)?;
-            } else {
-                let value = docids.iter().find(|v| v.index == 0).unwrap().value;
-                new_soft_builder.insert(external_id, value)?;
-            }
+            let value = docids.iter().find(|v| v.index == 0).unwrap().value;
+            new_docids_builder.insert(external_id, value)?;
         }
 
         drop(iter);
 
-        // We save this new map as the new soft map.
-        self.docids = new_soft_builder.into_map().map_data(Cow::Owned)?;
+        self.docids = new_docids_builder.into_map().map_data(Cow::Owned)?;
 
         Ok(())
     }
@@ -96,10 +87,8 @@ impl<'a> ExternalDocumentsIds<'a> {
         let mut iter = union_op.into_stream();
         while let Some((external_id, marked_docids)) = iter.next() {
             let id = indexed_last_value(marked_docids).unwrap();
-            if id != DELETED_ID {
-                let external_id = str::from_utf8(external_id).unwrap();
-                map.insert(external_id.to_owned(), id.try_into().unwrap());
-            }
+            let external_id = str::from_utf8(external_id).unwrap();
+            map.insert(external_id.to_owned(), id.try_into().unwrap());
         }
 
         map
