@@ -13,7 +13,7 @@ use milli::update::UpdateIndexingStep::{
     ComputeIdsAndMergeDocuments, IndexDocuments, MergeDataIntoFinalDatabase, RemapDocumentAddition,
 };
 use milli::update::{self, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig};
-use milli::{heed, Index, Object};
+use milli::{heed, AscDesc, Index, Object};
 use structopt::StructOpt;
 
 #[global_allocator]
@@ -75,7 +75,7 @@ impl Settings {
 
         let filterable_attributes: Vec<_> = index.filterable_fields(&txn)?.into_iter().collect();
 
-        let sortable_attributes: Vec<_> = index.sortable_fields(&txn)?.into_iter().collect();
+        let sortable_attributes: Vec<_> = vec!["school_subjects".to_owned()]; //index.sortable_fields(&txn)?.into_iter().collect();
 
         let criteria: Vec<_> = index.criteria(&txn)?.into_iter().map(|c| c.to_string()).collect();
 
@@ -358,6 +358,8 @@ struct Search {
     offset: Option<usize>,
     #[structopt(short, long)]
     limit: Option<usize>,
+    #[structopt(short, long)]
+    sort: Option<Vec<AscDesc>>,
     #[structopt(short, long, conflicts_with = "query")]
     interactive: bool,
 }
@@ -379,6 +381,7 @@ impl Performer for Search {
                             &self.filter,
                             &self.offset,
                             &self.limit,
+                            &self.sort,
                         )?;
 
                         let time = now.elapsed();
@@ -399,6 +402,7 @@ impl Performer for Search {
                 &self.filter,
                 &self.offset,
                 &self.limit,
+                &self.sort,
             )?;
 
             let time = now.elapsed();
@@ -420,6 +424,7 @@ impl Search {
         filter: &Option<String>,
         offset: &Option<usize>,
         limit: &Option<usize>,
+        sort: &Option<Vec<AscDesc>>,
     ) -> Result<Vec<Object>> {
         let txn = index.read_txn()?;
         let mut search = index.search(&txn);
@@ -433,7 +438,9 @@ impl Search {
                 search.filter(condition);
             }
         }
-
+        if let Some(sort) = sort {
+            search.sort_criteria(sort.clone());
+        }
         if let Some(offset) = offset {
             search.offset(*offset);
         }
@@ -461,6 +468,8 @@ impl Search {
 #[derive(Debug, StructOpt)]
 struct SettingsUpdate {
     #[structopt(long)]
+    sortable_attributes: Option<Vec<String>>,
+    #[structopt(long)]
     filterable_attributes: Option<Vec<String>>,
     #[structopt(long)]
     criteria: Option<Vec<String>>,
@@ -477,6 +486,14 @@ impl Performer for SettingsUpdate {
         let config = IndexerConfig { log_every_n: Some(100), ..Default::default() };
 
         let mut update = milli::update::Settings::new(&mut txn, &index, &config);
+
+        if let Some(ref sortable_attributes) = self.sortable_attributes {
+            if !sortable_attributes.is_empty() {
+                update.set_sortable_fields(sortable_attributes.iter().cloned().collect());
+            } else {
+                update.reset_sortable_fields();
+            }
+        }
 
         if let Some(ref filterable_attributes) = self.filterable_attributes {
             if !filterable_attributes.is_empty() {
