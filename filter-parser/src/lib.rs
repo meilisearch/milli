@@ -58,8 +58,7 @@ use nom::number::complete::recognize_float;
 use nom::sequence::{delimited, preceded, terminated, tuple};
 use nom::Finish;
 use nom_locate::LocatedSpan;
-pub(crate) use value::parse_value;
-use value::word_exact;
+use value::{parse_field_key, parse_field_value, parse_field_value_or_key, word_exact};
 
 pub type Span<'a> = LocatedSpan<&'a str, &'a str>;
 
@@ -169,9 +168,9 @@ fn ws<'a, O>(inner: impl FnMut(Span<'a>) -> IResult<O>) -> impl FnMut(Span<'a>) 
 
 /// value_list = (value ("," value)* ","?)?
 fn parse_value_list(input: Span) -> IResult<Vec<Token>> {
-    let (input, first_value) = opt(parse_value)(input)?;
+    let (input, first_value) = opt(parse_field_value)(input)?;
     if let Some(first_value) = first_value {
-        let value_list_el_parser = preceded(ws(tag(",")), parse_value);
+        let value_list_el_parser = preceded(ws(tag(",")), parse_field_value);
 
         let (input, mut values) = many0(value_list_el_parser)(input)?;
         let (input, _) = opt(ws(tag(",")))(input)?;
@@ -200,7 +199,7 @@ fn parse_in_body(input: Span) -> IResult<Vec<Token>> {
         if eof::<_, ()>(input).is_ok() {
             Error::new_from_kind(input, ErrorKind::InClosingBracket)
         } else {
-            let expected_value_kind = match parse_value(input) {
+            let expected_value_kind = match parse_field_value_or_key(input) {
                 Err(nom::Err::Error(e)) => match e.kind() {
                     ErrorKind::ReservedKeyword(_) => ExpectedValueKind::ReservedKeyword,
                     _ => ExpectedValueKind::Other,
@@ -216,7 +215,7 @@ fn parse_in_body(input: Span) -> IResult<Vec<Token>> {
 
 /// in = value "IN" "[" value_list "]"
 fn parse_in(input: Span) -> IResult<FilterCondition> {
-    let (input, value) = parse_value(input)?;
+    let (input, value) = parse_field_key(input)?;
     let (input, content) = parse_in_body(input)?;
 
     let filter = FilterCondition::In { fid: value, els: content };
@@ -225,7 +224,7 @@ fn parse_in(input: Span) -> IResult<FilterCondition> {
 
 /// in = value "NOT" WS* "IN" "[" value_list "]"
 fn parse_not_in(input: Span) -> IResult<FilterCondition> {
-    let (input, value) = parse_value(input)?;
+    let (input, value) = parse_field_key(input)?;
     let (input, _) = word_exact("NOT")(input)?;
     let (input, content) = parse_in_body(input)?;
 
@@ -647,6 +646,11 @@ pub mod tests {
         insta::assert_display_snapshot!(p(r#"NOT OR EXISTS AND EXISTS NOT EXISTS"#), @r###"
         Was expecting a value but instead got `OR`, which is a reserved keyword. To use `OR` as a field name or a value, surround it by quotes.
         5:7 NOT OR EXISTS AND EXISTS NOT EXISTS
+        "###);
+
+        insta::assert_display_snapshot!(p(r#"x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"#), @r###"
+        The attribute value `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` is too long. The maximum allowed length is 480 bytes.
+        505:505 x = aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         "###);
     }
 

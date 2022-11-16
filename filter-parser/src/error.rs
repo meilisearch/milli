@@ -63,6 +63,7 @@ pub enum ErrorKind<'a> {
     ExpectedEof,
     ExpectedValue(ExpectedValueKind),
     MalformedValue,
+    ValueTooLong(String),
     InOpeningBracket,
     InClosingBracket,
     NonFiniteFloat,
@@ -137,6 +138,10 @@ impl<'a> Display for Error<'a> {
             }
             ErrorKind::MalformedValue => {
                 writeln!(f, "Malformed value: `{}`.", escaped_input)?
+            }
+            ErrorKind::ValueTooLong(v) => {
+                // See MAX_FACET_VALUE_LENGTH for the explanation behind the maximum allowed length 
+                writeln!(f, "The attribute value `{v}` is too long. The maximum allowed length is 480 bytes.")?
             }
             ErrorKind::MissingClosingDelimiter(c) => {
                 writeln!(f, "Expression `{}` is missing the following closing delimiter: `{}`.", escaped_input, c)?

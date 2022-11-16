@@ -77,8 +77,23 @@ pub fn word_exact<'a, 'b: 'a>(tag: &'b str) -> impl Fn(Span<'a>) -> IResult<'a, 
     }
 }
 
+pub fn parse_field_key(input: Span) -> IResult<Token> {
+    parse_field_value_or_key(input)
+}
+pub fn parse_field_value(input: Span) -> IResult<Token> {
+    let (input, token) = parse_field_value_or_key(input)?;
+    // Search for MAX_FACET_VALUE_LENGTH for the reason of this limitation
+    if token.value().len() > 480 {
+        return Err(nom::Err::Failure(Error::new_from_kind(
+            input,
+            ErrorKind::ValueTooLong(token.value().to_owned()),
+        )));
+    }
+    Ok((input, token))
+}
+
 /// value          = WS* ( word | singleQuoted | doubleQuoted) WS+
-pub fn parse_value(input: Span) -> IResult<Token> {
+pub fn parse_field_value_or_key(input: Span) -> IResult<Token> {
     // to get better diagnostic message we are going to strip the left whitespaces from the input right now
     let (input, _) = take_while(char::is_whitespace)(input)?;
 
@@ -192,7 +207,7 @@ pub mod test {
 
         for (input, expected) in test_case {
             let input = Span::new_extra(input, input);
-            let result = parse_value(input);
+            let result = parse_field_value_or_key(input);
 
             assert!(
                 result.is_ok(),
@@ -294,7 +309,7 @@ pub mod test {
 
         for (input, expected, escaped) in test_case {
             let input = Span::new_extra(input, input);
-            let result = parse_value(input);
+            let result = parse_field_value_or_key(input);
 
             assert!(
                 result.is_ok(),
@@ -325,7 +340,7 @@ pub mod test {
 
         for (input, expected) in test_case {
             let input = Span::new_extra(input, input);
-            let result = parse_value(input);
+            let result = parse_field_value_or_key(input);
 
             assert!(
                 result.is_err(),
