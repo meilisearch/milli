@@ -6,7 +6,7 @@ use roaring::RoaringBitmap;
 
 use super::{Distinct, DocIter};
 use crate::error::InternalError;
-use crate::heed_codec::facet::*;
+use crate::heed_codec::facet::{FacetGroupKey, *};
 use crate::index::db_name;
 use crate::{DocumentId, FieldId, Index, Result};
 
@@ -21,6 +21,7 @@ const DOCID_SIZE: usize = size_of::<DocumentId>();
 /// care to keep the document we are currently on, and remove it from the excluded list. The next
 /// iterations will never contain any occurence of a document with the same distinct value as a
 /// document from previous iterations.
+#[derive(Clone)]
 pub struct FacetDistinct<'a> {
     distinct: FieldId,
     index: &'a Index,
@@ -46,13 +47,16 @@ impl<'a> FacetDistinctIter<'a> {
     fn facet_string_docids(&self, key: &str) -> heed::Result<Option<RoaringBitmap>> {
         self.index
             .facet_id_string_docids
-            .get(self.txn, &(self.distinct, key))
-            .map(|result| result.map(|(_original, docids)| docids))
+            .get(self.txn, &FacetGroupKey { field_id: self.distinct, level: 0, left_bound: key })
+            .map(|opt| opt.map(|v| v.bitmap))
     }
 
     fn facet_number_docids(&self, key: f64) -> heed::Result<Option<RoaringBitmap>> {
         // get facet docids on level 0
-        self.index.facet_id_f64_docids.get(self.txn, &(self.distinct, 0, key, key))
+        self.index
+            .facet_id_f64_docids
+            .get(self.txn, &FacetGroupKey { field_id: self.distinct, level: 0, left_bound: key })
+            .map(|opt| opt.map(|v| v.bitmap))
     }
 
     fn distinct_string(&mut self, id: DocumentId) -> Result<()> {
@@ -119,6 +123,7 @@ impl<'a> FacetDistinctIter<'a> {
     }
 }
 
+#[allow(clippy::drop_non_drop)]
 fn facet_values_prefix_key(distinct: FieldId, id: DocumentId) -> [u8; FID_SIZE + DOCID_SIZE] {
     concat_arrays!(distinct.to_be_bytes(), id.to_be_bytes())
 }

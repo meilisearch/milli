@@ -9,6 +9,7 @@ use super::{
     query_docids, resolve_query_tree, Candidates, Context, Criterion, CriterionParameters,
     CriterionResult,
 };
+use crate::search::criteria::resolve_phrase;
 use crate::search::query_tree::{maximum_typo, Operation, Query, QueryKind};
 use crate::search::{word_derivations, WordDerivationsCache};
 use crate::Result;
@@ -69,7 +70,7 @@ impl<'t> Criterion for Typo<'t> {
                     let fst = self.ctx.words_fst();
                     let new_query_tree = match self.typos {
                         typos if typos < MAX_TYPOS_PER_WORD => alterate_query_tree(
-                            &fst,
+                            fst,
                             query_tree.clone(),
                             self.typos,
                             params.wdcache,
@@ -78,7 +79,7 @@ impl<'t> Criterion for Typo<'t> {
                             // When typos >= MAX_TYPOS_PER_WORD, no more alteration of the query tree is possible,
                             // we keep the altered query tree
                             *query_tree = alterate_query_tree(
-                                &fst,
+                                fst,
                                 query_tree.clone(),
                                 self.typos,
                                 params.wdcache,
@@ -199,7 +200,7 @@ fn alterate_query_tree(
                 ops.iter_mut().try_for_each(|op| recurse(words_fst, op, number_typos, wdcache))
             }
             // Because Phrases don't allow typos, no alteration can be done.
-            Phrase(_words) => return Ok(()),
+            Phrase(_words) => Ok(()),
             Operation::Query(q) => {
                 if let QueryKind::Tolerant { typo, word } = &q.kind {
                     // if no typo is allowed we don't call word_derivations function,
@@ -256,27 +257,7 @@ fn resolve_candidates<'t>(
 
         match query_tree {
             And(ops) => mdfs(ctx, ops, number_typos, cache, wdcache),
-            Phrase(words) => {
-                let mut candidates = RoaringBitmap::new();
-                let mut first_loop = true;
-                for slice in words.windows(2) {
-                    let (left, right) = (&slice[0], &slice[1]);
-                    match ctx.word_pair_proximity_docids(left, right, 1)? {
-                        Some(pair_docids) => {
-                            if pair_docids.is_empty() {
-                                return Ok(RoaringBitmap::new());
-                            } else if first_loop {
-                                candidates = pair_docids;
-                                first_loop = false;
-                            } else {
-                                candidates &= pair_docids;
-                            }
-                        }
-                        None => return Ok(RoaringBitmap::new()),
-                    }
-                }
-                Ok(candidates)
-            }
+            Phrase(words) => resolve_phrase(ctx, words),
             Or(_, ops) => {
                 let mut candidates = RoaringBitmap::new();
                 for op in ops {
@@ -348,6 +329,7 @@ mod test {
     use super::super::initial::Initial;
     use super::super::test::TestContext;
     use super::*;
+    use crate::search::NoopDistinct;
 
     fn display_criteria(mut criteria: Typo, mut parameters: CriterionParameters) -> String {
         let mut result = String::new();
@@ -368,7 +350,8 @@ mod test {
             excluded_candidates: &RoaringBitmap::new(),
         };
 
-        let parent = Initial::new(query_tree, facet_candidates);
+        let parent =
+            Initial::<NoopDistinct>::new(&context, query_tree, facet_candidates, false, None);
         let criteria = Typo::new(&context, Box::new(parent));
 
         let result = display_criteria(criteria, criterion_parameters);
@@ -405,7 +388,8 @@ mod test {
             wdcache: &mut WordDerivationsCache::new(),
             excluded_candidates: &RoaringBitmap::new(),
         };
-        let parent = Initial::new(Some(query_tree), facet_candidates);
+        let parent =
+            Initial::<NoopDistinct>::new(&context, Some(query_tree), facet_candidates, false, None);
         let criteria = Typo::new(&context, Box::new(parent));
 
         let result = display_criteria(criteria, criterion_parameters);
@@ -439,7 +423,13 @@ mod test {
             wdcache: &mut WordDerivationsCache::new(),
             excluded_candidates: &RoaringBitmap::new(),
         };
-        let parent = Initial::new(query_tree, Some(facet_candidates.clone()));
+        let parent = Initial::<NoopDistinct>::new(
+            &context,
+            query_tree,
+            Some(facet_candidates.clone()),
+            false,
+            None,
+        );
         let criteria = Typo::new(&context, Box::new(parent));
 
         let result = display_criteria(criteria, criterion_parameters);
@@ -476,7 +466,13 @@ mod test {
             wdcache: &mut WordDerivationsCache::new(),
             excluded_candidates: &RoaringBitmap::new(),
         };
-        let parent = Initial::new(Some(query_tree), Some(facet_candidates.clone()));
+        let parent = Initial::<NoopDistinct>::new(
+            &context,
+            Some(query_tree),
+            Some(facet_candidates.clone()),
+            false,
+            None,
+        );
         let criteria = Typo::new(&context, Box::new(parent));
 
         let result = display_criteria(criteria, criterion_parameters);

@@ -15,11 +15,12 @@ use slice_group_by::GroupBy;
 mod distinct;
 mod facet_distribution;
 mod filters;
+mod phrase_search;
 mod query_criteria;
 mod sort;
 mod typo_tolerance;
 
-pub const TEST_QUERY: &'static str = "hello world america";
+pub const TEST_QUERY: &str = "hello world america";
 
 pub const EXTERNAL_DOCUMENTS_IDS: &[&str; 17] =
     &["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q"];
@@ -57,13 +58,14 @@ pub fn setup_search_index_with_criteria(criteria: &[Criterion]) -> Index {
         S("america") => vec![S("the united states")],
     });
     builder.set_searchable_fields(vec![S("title"), S("description")]);
-    builder.execute(|_| ()).unwrap();
+    builder.execute(|_| (), || false).unwrap();
 
     // index documents
     let config = IndexerConfig { max_memory: Some(10 * 1024 * 1024), ..Default::default() };
     let indexing_config = IndexDocumentsConfig { autogenerate_docids: true, ..Default::default() };
 
-    let builder = IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| ()).unwrap();
+    let builder =
+        IndexDocuments::new(&mut wtxn, &index, &config, indexing_config, |_| (), || false).unwrap();
     let mut documents_builder = DocumentsBatchBuilder::new(Vec::new());
     let reader = Cursor::new(CONTENT.as_bytes());
 
@@ -176,7 +178,7 @@ fn execute_filter(filter: &str, document: &TestDocument) -> Option<String> {
         {
             id = Some(document.id.clone())
         }
-    } else if let Some((field, filter)) = filter.split_once("=") {
+    } else if let Some((field, filter)) = filter.split_once('=') {
         if field == "tag" && document.tag == filter {
             id = Some(document.id.clone())
         } else if field == "asc_desc_rank"
@@ -184,11 +186,11 @@ fn execute_filter(filter: &str, document: &TestDocument) -> Option<String> {
         {
             id = Some(document.id.clone())
         }
-    } else if let Some(("asc_desc_rank", filter)) = filter.split_once("<") {
+    } else if let Some(("asc_desc_rank", filter)) = filter.split_once('<') {
         if document.asc_desc_rank < filter.parse().unwrap() {
             id = Some(document.id.clone())
         }
-    } else if let Some(("asc_desc_rank", filter)) = filter.split_once(">") {
+    } else if let Some(("asc_desc_rank", filter)) = filter.split_once('>') {
         if document.asc_desc_rank > filter.parse().unwrap() {
             id = Some(document.id.clone())
         }

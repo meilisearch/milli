@@ -39,7 +39,7 @@ pub fn extract_word_pair_proximity_docids<R: io::Read + io::Seek>(
     let mut cursor = docid_word_positions.into_cursor()?;
     while let Some((key, value)) = cursor.move_on_next()? {
         let (document_id_bytes, word_bytes) = try_split_array_at(key)
-            .ok_or_else(|| SerializationError::Decoding { db_name: Some(DOCID_WORD_POSITIONS) })?;
+            .ok_or(SerializationError::Decoding { db_name: Some(DOCID_WORD_POSITIONS) })?;
         let document_id = u32::from_be_bytes(document_id_bytes);
         let word = str::from_utf8(word_bytes)?;
 
@@ -81,7 +81,7 @@ pub fn extract_word_pair_proximity_docids<R: io::Read + io::Seek>(
 ///
 /// This list is used by the engine to calculate the documents containing words that are
 /// close to each other.
-fn document_word_positions_into_sorter<'b>(
+fn document_word_positions_into_sorter(
     document_id: DocumentId,
     mut word_positions_heap: BinaryHeap<PeekedWordPosition<vec::IntoIter<u32>>>,
     word_pair_proximity_docids_sorter: &mut grenad::Sorter<MergeFn>,
@@ -106,17 +106,6 @@ fn document_word_positions_into_sorter<'b>(
                             *p = cmp::min(*p, prox);
                         })
                         .or_insert(prox);
-
-                    // We also compute the inverse proximity.
-                    let prox = prox + 1;
-                    if prox < MAX_DISTANCE {
-                        word_pair_proximity
-                            .entry((word.clone(), head.word.clone()))
-                            .and_modify(|p| {
-                                *p = cmp::min(*p, prox);
-                            })
-                            .or_insert(prox);
-                    }
                 }
             }
 
@@ -127,6 +116,17 @@ fn document_word_positions_into_sorter<'b>(
             // Advance the head and push it in the heap.
             if let Some(mut head) = ordered_peeked_word_positions.pop() {
                 if let Some(next_position) = head.iter.next() {
+                    let prox = positions_proximity(head.position, next_position);
+
+                    if prox > 0 && prox < MAX_DISTANCE {
+                        word_pair_proximity
+                            .entry((head.word.clone(), head.word.clone()))
+                            .and_modify(|p| {
+                                *p = cmp::min(*p, prox);
+                            })
+                            .or_insert(prox);
+                    }
+
                     word_positions_heap.push(PeekedWordPosition {
                         word: head.word,
                         position: next_position,
@@ -140,13 +140,12 @@ fn document_word_positions_into_sorter<'b>(
     let mut key_buffer = Vec::new();
     for ((w1, w2), prox) in word_pair_proximity {
         key_buffer.clear();
+        key_buffer.push(prox as u8);
         key_buffer.extend_from_slice(w1.as_bytes());
         key_buffer.push(0);
         key_buffer.extend_from_slice(w2.as_bytes());
-        key_buffer.push(0);
-        key_buffer.push(prox as u8);
 
-        word_pair_proximity_docids_sorter.insert(&key_buffer, &document_id.to_ne_bytes())?;
+        word_pair_proximity_docids_sorter.insert(&key_buffer, document_id.to_ne_bytes())?;
     }
 
     Ok(())

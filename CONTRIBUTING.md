@@ -5,24 +5,11 @@ First, thank you for contributing to Meilisearch! The goal of this document is t
 Remember that there are many ways to contribute other than writing code: writing [tutorials or blog posts](https://github.com/meilisearch/awesome-meilisearch), improving [the documentation](https://github.com/meilisearch/documentation), submitting [bug reports](https://github.com/meilisearch/milli/issues/new) and [feature requests](https://github.com/meilisearch/product/discussions/categories/feedback-feature-proposal)...
 
 ## Table of Contents
-- [Hacktoberfest](#hacktoberfest-2022)
 - [Assumptions](#assumptions)
 - [How to Contribute](#how-to-contribute)
 - [Development Workflow](#development-workflow)
 - [Git Guidelines](#git-guidelines)
 - [Release Process (for internal team only)](#release-process-for-internal-team-only)
-
-## Hacktoberfest 2022
-
-It's [Hacktoberfest month](https://hacktoberfest.com)! 🥳
-
-Thanks so much for participating with Meilisearch this year!
-
-1. We will follow the quality standards set by the organizers of Hacktoberfest (see detail on their [website](https://hacktoberfest.com/participation/#spam)). Our reviewers will not consider any PR that doesn’t match that standard.
-2. PRs reviews will take place from Monday to Thursday, during usual working hours, CEST time. If you submit outside of these hours, there’s no need to panic; we will get around to your contribution.
-3. There will be no issue assignment as we don’t want people to ask to be assigned specific issues and never return, discouraging the volunteer contributors from opening a PR to fix this issue. We take the liberty to choose the PR that best fixes the issue, so we encourage you to get to it as soon as possible and do your best!
-
-You can check out the longer, more complete guideline documentation [here](https://github.com/meilisearch/.github/blob/main/Hacktoberfest_2022_contributors_guidelines.md).
 
 ## Assumptions
 
@@ -43,14 +30,6 @@ You can check out the longer, more complete guideline documentation [here](https
 6. [Submit the branch as a Pull Request](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork) pointing to the `main` branch of the Meilisearch repository. A maintainer should comment and/or review your Pull Request within a few days. Although depending on the circumstances, it may take longer.
 
 ## Development Workflow
-
-### Setup and run
-
-```bash
-cargo run --release
-```
-
-We recommend using the `--release` flag to test the full performance.
 
 ### Test
 
@@ -119,7 +98,7 @@ This project integrates a tool to create automated changelogs: the [release-draf
 
 ### How to Publish the Release <!-- omit in toc -->
 
-Make a PR modifying all the `Cargo.toml` files with the right version.
+Make a PR modifying all the `Cargo.toml` files with the right version by using our automation -> Go to [this GitHub Action](https://github.com/meilisearch/milli/actions/workflows/update-cargo-toml-version.yml), click on `Run workflow`, and fill the appropriate version before validating. A PR updating all the versions in the `Cargo.toml` files will be created.
 
 Once the changes are merged on `main`, you can publish the current draft release via the [GitHub interface](https://github.com/meilisearch/milli/releases): on this page, click on `Edit` (related to the draft release) > update the description if needed > when you are ready, click on `Publish release`.
 

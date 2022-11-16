@@ -89,7 +89,7 @@ impl<'t> Criterion for Attribute<'t> {
                             }
                         }
                     } else {
-                        let mut set_buckets = match self.set_buckets.as_mut() {
+                        let set_buckets = match self.set_buckets.as_mut() {
                             Some(set_buckets) => set_buckets,
                             None => {
                                 let new_buckets = initialize_set_buckets(
@@ -102,7 +102,7 @@ impl<'t> Criterion for Attribute<'t> {
                             }
                         };
 
-                        match set_compute_candidates(&mut set_buckets, &allowed_candidates)? {
+                        match set_compute_candidates(set_buckets, &allowed_candidates)? {
                             Some((_score, candidates)) => candidates,
                             None => {
                                 return Ok(Some(CriterionResult {
@@ -179,6 +179,7 @@ impl<'t> Criterion for Attribute<'t> {
 /// QueryPositionIterator is an Iterator over positions of a Query,
 /// It contains iterators over words positions.
 struct QueryPositionIterator<'t> {
+    #[allow(clippy::type_complexity)]
     inner:
         Vec<Peekable<Box<dyn Iterator<Item = heed::Result<((&'t str, u32), RoaringBitmap)>> + 't>>>,
 }
@@ -199,18 +200,18 @@ impl<'t> QueryPositionIterator<'t> {
                         let iter = ctx.word_position_iterator(word, in_prefix_cache)?;
                         inner.push(iter.peekable());
                     } else {
-                        for (word, _) in word_derivations(&word, true, 0, ctx.words_fst(), wdcache)?
+                        for (word, _) in word_derivations(word, true, 0, ctx.words_fst(), wdcache)?
                         {
-                            let iter = ctx.word_position_iterator(&word, in_prefix_cache)?;
+                            let iter = ctx.word_position_iterator(word, in_prefix_cache)?;
                             inner.push(iter.peekable());
                         }
                     }
                 }
                 QueryKind::Tolerant { typo, word } => {
                     for (word, _) in
-                        word_derivations(&word, query.prefix, *typo, ctx.words_fst(), wdcache)?
+                        word_derivations(word, query.prefix, *typo, ctx.words_fst(), wdcache)?
                     {
-                        let iter = ctx.word_position_iterator(&word, in_prefix_cache)?;
+                        let iter = ctx.word_position_iterator(word, in_prefix_cache)?;
                         inner.push(iter.peekable());
                     }
                 }
@@ -476,8 +477,7 @@ fn initialize_linear_buckets(
                             } else {
                                 words_positions
                                     .get(word)
-                                    .map(|positions| positions.iter().next())
-                                    .flatten()
+                                    .and_then(|positions| positions.iter().next())
                             }
                         }
                         QueryKind::Tolerant { typo, word } => {
@@ -574,12 +574,13 @@ fn flatten_query_tree(query_tree: &Operation) -> FlattenedQueryTree {
                 if ops.iter().all(|op| op.query().is_some()) {
                     vec![vec![ops.iter().flat_map(|op| op.query()).cloned().collect()]]
                 } else {
-                    ops.iter().map(recurse).flatten().collect()
+                    ops.iter().flat_map(recurse).collect()
                 }
             }
             Phrase(words) => {
                 let queries = words
                     .iter()
+                    .filter_map(|w| w.as_ref())
                     .map(|word| vec![Query { prefix: false, kind: QueryKind::exact(word.clone()) }])
                     .collect();
                 vec![queries]

@@ -12,16 +12,18 @@ use rstar::RTree;
 use time::OffsetDateTime;
 
 use crate::error::{InternalError, UserError};
+use crate::facet::FacetType;
 use crate::fields_ids_map::FieldsIdsMap;
 use crate::heed_codec::facet::{
-    FacetLevelValueF64Codec, FacetStringLevelZeroCodec, FacetStringLevelZeroValueCodec,
-    FieldDocIdFacetF64Codec, FieldDocIdFacetStringCodec, FieldIdCodec,
+    FacetGroupKeyCodec, FacetGroupValueCodec, FieldDocIdFacetF64Codec, FieldDocIdFacetStringCodec,
+    FieldIdCodec, OrderedF64Codec,
 };
+use crate::heed_codec::StrRefCodec;
 use crate::{
     default_criteria, BEU32StrCodec, BoRoaringBitmapCodec, CboRoaringBitmapCodec, Criterion,
     DocumentId, ExternalDocumentsIds, FacetDistribution, FieldDistribution, FieldId,
     FieldIdWordCountCodec, GeoPoint, ObkvCodec, Result, RoaringBitmapCodec, RoaringBitmapLenCodec,
-    Search, StrBEU32Codec, StrStrU8Codec, BEU16, BEU32,
+    Search, StrBEU32Codec, U8StrStrCodec, BEU16, BEU32,
 };
 
 pub const DEFAULT_MIN_WORD_LEN_ONE_TYPO: u8 = 5;
@@ -70,6 +72,7 @@ pub mod db_name {
     pub const DOCID_WORD_POSITIONS: &str = "docid-word-positions";
     pub const WORD_PAIR_PROXIMITY_DOCIDS: &str = "word-pair-proximity-docids";
     pub const WORD_PREFIX_PAIR_PROXIMITY_DOCIDS: &str = "word-prefix-pair-proximity-docids";
+    pub const PREFIX_WORD_PAIR_PROXIMITY_DOCIDS: &str = "prefix-word-pair-proximity-docids";
     pub const WORD_POSITION_DOCIDS: &str = "word-position-docids";
     pub const WORD_PREFIX_POSITION_DOCIDS: &str = "word-prefix-position-docids";
     pub const FIELD_ID_WORD_COUNT_DOCIDS: &str = "field-id-word-count-docids";
@@ -105,9 +108,11 @@ pub struct Index {
     pub docid_word_positions: Database<BEU32StrCodec, BoRoaringBitmapCodec>,
 
     /// Maps the proximity between a pair of words with all the docids where this relation appears.
-    pub word_pair_proximity_docids: Database<StrStrU8Codec, CboRoaringBitmapCodec>,
+    pub word_pair_proximity_docids: Database<U8StrStrCodec, CboRoaringBitmapCodec>,
     /// Maps the proximity between a pair of word and prefix with all the docids where this relation appears.
-    pub word_prefix_pair_proximity_docids: Database<StrStrU8Codec, CboRoaringBitmapCodec>,
+    pub word_prefix_pair_proximity_docids: Database<U8StrStrCodec, CboRoaringBitmapCodec>,
+    /// Maps the proximity between a pair of prefix and word with all the docids where this relation appears.
+    pub prefix_word_pair_proximity_docids: Database<U8StrStrCodec, CboRoaringBitmapCodec>,
 
     /// Maps the word and the position with the docids that corresponds to it.
     pub word_position_docids: Database<StrBEU32Codec, CboRoaringBitmapCodec>,
@@ -119,10 +124,10 @@ pub struct Index {
     /// Maps the facet field id and the docids for which this field exists
     pub facet_id_exists_docids: Database<FieldIdCodec, CboRoaringBitmapCodec>,
 
-    /// Maps the facet field id, level and the number with the docids that corresponds to it.
-    pub facet_id_f64_docids: Database<FacetLevelValueF64Codec, CboRoaringBitmapCodec>,
-    /// Maps the facet field id and the string with the original string and docids that corresponds to it.
-    pub facet_id_string_docids: Database<FacetStringLevelZeroCodec, FacetStringLevelZeroValueCodec>,
+    /// Maps the facet field id and ranges of numbers with the docids that corresponds to them.
+    pub facet_id_f64_docids: Database<FacetGroupKeyCodec<OrderedF64Codec>, FacetGroupValueCodec>,
+    /// Maps the facet field id and ranges of strings with the docids that corresponds to them.
+    pub facet_id_string_docids: Database<FacetGroupKeyCodec<StrRefCodec>, FacetGroupValueCodec>,
 
     /// Maps the document id, the facet field id and the numbers.
     pub field_id_docid_facet_f64s: Database<FieldDocIdFacetF64Codec, Unit>,
@@ -134,10 +139,15 @@ pub struct Index {
 }
 
 impl Index {
-    pub fn new<P: AsRef<Path>>(mut options: heed::EnvOpenOptions, path: P) -> Result<Index> {
+    pub fn new_with_creation_dates<P: AsRef<Path>>(
+        mut options: heed::EnvOpenOptions,
+        path: P,
+        created_at: OffsetDateTime,
+        updated_at: OffsetDateTime,
+    ) -> Result<Index> {
         use db_name::*;
 
-        options.max_dbs(17);
+        options.max_dbs(18);
         unsafe { options.flag(Flags::MdbAlwaysFreePages) };
 
         let env = options.open(path)?;
@@ -150,6 +160,8 @@ impl Index {
         let word_pair_proximity_docids = env.create_database(Some(WORD_PAIR_PROXIMITY_DOCIDS))?;
         let word_prefix_pair_proximity_docids =
             env.create_database(Some(WORD_PREFIX_PAIR_PROXIMITY_DOCIDS))?;
+        let prefix_word_pair_proximity_docids =
+            env.create_database(Some(PREFIX_WORD_PAIR_PROXIMITY_DOCIDS))?;
         let word_position_docids = env.create_database(Some(WORD_POSITION_DOCIDS))?;
         let field_id_word_count_docids = env.create_database(Some(FIELD_ID_WORD_COUNT_DOCIDS))?;
         let word_prefix_position_docids = env.create_database(Some(WORD_PREFIX_POSITION_DOCIDS))?;
@@ -162,7 +174,7 @@ impl Index {
             env.create_database(Some(FIELD_ID_DOCID_FACET_STRINGS))?;
         let documents = env.create_database(Some(DOCUMENTS))?;
 
-        Index::initialize_creation_dates(&env, main)?;
+        Index::set_creation_dates(&env, main, created_at, updated_at)?;
 
         Ok(Index {
             env,
@@ -174,6 +186,7 @@ impl Index {
             docid_word_positions,
             word_pair_proximity_docids,
             word_prefix_pair_proximity_docids,
+            prefix_word_pair_proximity_docids,
             word_position_docids,
             word_prefix_position_docids,
             field_id_word_count_docids,
@@ -186,21 +199,30 @@ impl Index {
         })
     }
 
-    fn initialize_creation_dates(env: &heed::Env, main: PolyDatabase) -> heed::Result<()> {
+    pub fn new<P: AsRef<Path>>(options: heed::EnvOpenOptions, path: P) -> Result<Index> {
+        let now = OffsetDateTime::now_utc();
+        Self::new_with_creation_dates(options, path, now, now)
+    }
+
+    fn set_creation_dates(
+        env: &heed::Env,
+        main: PolyDatabase,
+        created_at: OffsetDateTime,
+        updated_at: OffsetDateTime,
+    ) -> heed::Result<()> {
         let mut txn = env.write_txn()?;
         // The db was just created, we update its metadata with the relevant information.
         if main.get::<_, Str, SerdeJson<OffsetDateTime>>(&txn, main_key::CREATED_AT_KEY)?.is_none()
         {
-            let now = OffsetDateTime::now_utc();
             main.put::<_, Str, SerdeJson<OffsetDateTime>>(
                 &mut txn,
                 main_key::UPDATED_AT_KEY,
-                &now,
+                &updated_at,
             )?;
             main.put::<_, Str, SerdeJson<OffsetDateTime>>(
                 &mut txn,
                 main_key::CREATED_AT_KEY,
-                &now,
+                &created_at,
             )?;
             txn.commit()?;
         }
@@ -299,7 +321,7 @@ impl Index {
     /// Writes the documents primary key, this is the field name that is used to store the id.
     pub(crate) fn put_primary_key(&self, wtxn: &mut RwTxn, primary_key: &str) -> heed::Result<()> {
         self.set_updated_at(wtxn, &OffsetDateTime::now_utc())?;
-        self.main.put::<_, Str, Str>(wtxn, main_key::PRIMARY_KEY_KEY, &primary_key)
+        self.main.put::<_, Str, Str>(wtxn, main_key::PRIMARY_KEY_KEY, primary_key)
     }
 
     /// Deletes the primary key of the documents, this can be done to reset indexes settings.
@@ -740,68 +762,38 @@ impl Index {
 
     /* faceted documents ids */
 
-    /// Writes the documents ids that are faceted with numbers under this field id.
-    pub(crate) fn put_number_faceted_documents_ids(
+    /// Writes the documents ids that are faceted under this field id for the given facet type.
+    pub fn put_faceted_documents_ids(
         &self,
         wtxn: &mut RwTxn,
         field_id: FieldId,
+        facet_type: FacetType,
         docids: &RoaringBitmap,
     ) -> heed::Result<()> {
-        let mut buffer =
-            [0u8; main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len() + size_of::<FieldId>()];
-        buffer[..main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()]
-            .copy_from_slice(main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
-        buffer[main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()..]
-            .copy_from_slice(&field_id.to_be_bytes());
+        let key = match facet_type {
+            FacetType::String => main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX,
+            FacetType::Number => main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX,
+        };
+        let mut buffer = vec![0u8; key.len() + size_of::<FieldId>()];
+        buffer[..key.len()].copy_from_slice(key.as_bytes());
+        buffer[key.len()..].copy_from_slice(&field_id.to_be_bytes());
         self.main.put::<_, ByteSlice, RoaringBitmapCodec>(wtxn, &buffer, docids)
     }
 
-    /// Retrieve all the documents ids that faceted with numbers under this field id.
-    pub fn number_faceted_documents_ids(
+    /// Retrieve all the documents ids that are faceted under this field id for the given facet type.
+    pub fn faceted_documents_ids(
         &self,
         rtxn: &RoTxn,
         field_id: FieldId,
+        facet_type: FacetType,
     ) -> heed::Result<RoaringBitmap> {
-        let mut buffer =
-            [0u8; main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len() + size_of::<FieldId>()];
-        buffer[..main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()]
-            .copy_from_slice(main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
-        buffer[main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX.len()..]
-            .copy_from_slice(&field_id.to_be_bytes());
-        match self.main.get::<_, ByteSlice, RoaringBitmapCodec>(rtxn, &buffer)? {
-            Some(docids) => Ok(docids),
-            None => Ok(RoaringBitmap::new()),
-        }
-    }
-
-    /// Writes the documents ids that are faceted with strings under this field id.
-    pub(crate) fn put_string_faceted_documents_ids(
-        &self,
-        wtxn: &mut RwTxn,
-        field_id: FieldId,
-        docids: &RoaringBitmap,
-    ) -> heed::Result<()> {
-        let mut buffer =
-            [0u8; main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len() + size_of::<FieldId>()];
-        buffer[..main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()]
-            .copy_from_slice(main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
-        buffer[main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()..]
-            .copy_from_slice(&field_id.to_be_bytes());
-        self.main.put::<_, ByteSlice, RoaringBitmapCodec>(wtxn, &buffer, docids)
-    }
-
-    /// Retrieve all the documents ids that faceted with strings under this field id.
-    pub fn string_faceted_documents_ids(
-        &self,
-        rtxn: &RoTxn,
-        field_id: FieldId,
-    ) -> heed::Result<RoaringBitmap> {
-        let mut buffer =
-            [0u8; main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len() + size_of::<FieldId>()];
-        buffer[..main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()]
-            .copy_from_slice(main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.as_bytes());
-        buffer[main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX.len()..]
-            .copy_from_slice(&field_id.to_be_bytes());
+        let key = match facet_type {
+            FacetType::String => main_key::STRING_FACETED_DOCUMENTS_IDS_PREFIX,
+            FacetType::Number => main_key::NUMBER_FACETED_DOCUMENTS_IDS_PREFIX,
+        };
+        let mut buffer = vec![0u8; key.len() + size_of::<FieldId>()];
+        buffer[..key.len()].copy_from_slice(key.as_bytes());
+        buffer[key.len()..].copy_from_slice(&field_id.to_be_bytes());
         match self.main.get::<_, ByteSlice, RoaringBitmapCodec>(rtxn, &buffer)? {
             Some(docids) => Ok(docids),
             None => Ok(RoaringBitmap::new()),
@@ -978,7 +970,7 @@ impl Index {
             let kv = self
                 .documents
                 .get(rtxn, &BEU32::new(id))?
-                .ok_or_else(|| UserError::UnknownInternalDocumentId { document_id: id })?;
+                .ok_or(UserError::UnknownInternalDocumentId { document_id: id })?;
             documents.push((id, kv));
         }
 
@@ -1037,7 +1029,7 @@ impl Index {
         wtxn: &mut RwTxn,
         time: &OffsetDateTime,
     ) -> heed::Result<()> {
-        self.main.put::<_, Str, SerdeJson<OffsetDateTime>>(wtxn, main_key::UPDATED_AT_KEY, &time)
+        self.main.put::<_, Str, SerdeJson<OffsetDateTime>>(wtxn, main_key::UPDATED_AT_KEY, time)
     }
 
     pub fn authorize_typos(&self, txn: &RoTxn) -> heed::Result<bool> {
@@ -1181,6 +1173,7 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use crate::documents::DocumentsBatchReader;
+    use crate::error::{Error, InternalError};
     use crate::index::{DEFAULT_MIN_WORD_LEN_ONE_TYPO, DEFAULT_MIN_WORD_LEN_TWO_TYPOS};
     use crate::update::{self, IndexDocuments, IndexDocumentsConfig, IndexerConfig, Settings};
     use crate::{db_snap, Index};
@@ -1226,10 +1219,11 @@ pub(crate) mod tests {
         {
             let builder = IndexDocuments::new(
                 wtxn,
-                &self,
+                self,
                 &self.indexer_config,
                 self.index_documents_config.clone(),
                 |_| (),
+                || false,
             )
             .unwrap();
             let (builder, user_error) = builder.add_documents(documents).unwrap();
@@ -1266,9 +1260,43 @@ pub(crate) mod tests {
         ) -> Result<(), crate::error::Error> {
             let mut builder = update::Settings::new(wtxn, &self.inner, &self.indexer_config);
             update(&mut builder);
-            builder.execute(drop)?;
+            builder.execute(drop, || false)?;
             Ok(())
         }
+    }
+
+    #[test]
+    fn aborting_indexation() {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let index = TempIndex::new();
+        let mut wtxn = index.inner.write_txn().unwrap();
+
+        let should_abort = AtomicBool::new(false);
+        let builder = IndexDocuments::new(
+            &mut wtxn,
+            &index.inner,
+            &index.indexer_config,
+            index.index_documents_config.clone(),
+            |_| (),
+            || should_abort.load(Relaxed),
+        )
+        .unwrap();
+
+        let (builder, user_error) = builder
+            .add_documents(documents!([
+                { "id": 1, "name": "kevin" },
+                { "id": 2, "name": "bob", "age": 20 },
+                { "id": 2, "name": "bob", "age": 20 },
+            ]))
+            .unwrap();
+        user_error.unwrap();
+
+        should_abort.store(true, Relaxed);
+        let err = builder.execute().unwrap_err();
+
+        assert!(matches!(err, Error::InternalError(InternalError::AbortedIndexation)));
     }
 
     #[test]

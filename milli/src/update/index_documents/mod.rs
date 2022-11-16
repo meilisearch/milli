@@ -7,7 +7,7 @@ mod typed_chunk;
 use std::collections::HashSet;
 use std::io::{Cursor, Read, Seek};
 use std::iter::FromIterator;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::NonZeroU32;
 use std::result::Result as StdResult;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -27,17 +27,16 @@ pub use self::enrich::{
 pub use self::helpers::{
     as_cloneable_grenad, create_sorter, create_writer, fst_stream_into_hashset,
     fst_stream_into_vec, merge_cbo_roaring_bitmaps, merge_roaring_bitmaps,
-    sorter_into_lmdb_database, valid_lmdb_key, write_into_lmdb_database, writer_into_reader,
-    ClonableMmap, MergeFn,
+    sorter_into_lmdb_database, valid_lmdb_key, writer_into_reader, ClonableMmap, MergeFn,
 };
 use self::helpers::{grenad_obkv_into_chunks, GrenadParameters};
 pub use self::transform::{Transform, TransformOutput};
 use crate::documents::{obkv_to_object, DocumentsBatchReader};
-use crate::error::UserError;
+use crate::error::{Error, InternalError, UserError};
 pub use crate::update::index_documents::helpers::CursorClonableMmap;
 use crate::update::{
-    self, Facets, IndexerConfig, UpdateIndexingStep, WordPrefixDocids,
-    WordPrefixPairProximityDocids, WordPrefixPositionDocids, WordsPrefixesFst,
+    self, IndexerConfig, PrefixWordPairsProximityDocids, UpdateIndexingStep, WordPrefixDocids,
+    WordPrefixPositionDocids, WordsPrefixesFst,
 };
 use crate::{Index, Result, RoaringBitmapCodec};
 
@@ -71,20 +70,19 @@ impl Default for IndexDocumentsMethod {
     }
 }
 
-pub struct IndexDocuments<'t, 'u, 'i, 'a, F> {
+pub struct IndexDocuments<'t, 'u, 'i, 'a, FP, FA> {
     wtxn: &'t mut heed::RwTxn<'i, 'u>,
     index: &'i Index,
     config: IndexDocumentsConfig,
     indexer_config: &'a IndexerConfig,
     transform: Option<Transform<'a, 'i>>,
-    progress: F,
+    progress: FP,
+    should_abort: FA,
     added_documents: u64,
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct IndexDocumentsConfig {
-    pub facet_level_group_size: Option<NonZeroUsize>,
-    pub facet_min_level_size: Option<NonZeroUsize>,
     pub words_prefix_threshold: Option<u32>,
     pub max_prefix_length: Option<usize>,
     pub words_positions_level_group_size: Option<NonZeroU32>,
@@ -93,20 +91,22 @@ pub struct IndexDocumentsConfig {
     pub autogenerate_docids: bool,
 }
 
-impl<'t, 'u, 'i, 'a, F> IndexDocuments<'t, 'u, 'i, 'a, F>
+impl<'t, 'u, 'i, 'a, FP, FA> IndexDocuments<'t, 'u, 'i, 'a, FP, FA>
 where
-    F: Fn(UpdateIndexingStep) + Sync,
+    FP: Fn(UpdateIndexingStep) + Sync,
+    FA: Fn() -> bool + Sync,
 {
     pub fn new(
         wtxn: &'t mut heed::RwTxn<'i, 'u>,
         index: &'i Index,
         indexer_config: &'a IndexerConfig,
         config: IndexDocumentsConfig,
-        progress: F,
-    ) -> Result<IndexDocuments<'t, 'u, 'i, 'a, F>> {
+        progress: FP,
+        should_abort: FA,
+    ) -> Result<IndexDocuments<'t, 'u, 'i, 'a, FP, FA>> {
         let transform = Some(Transform::new(
             wtxn,
-            &index,
+            index,
             indexer_config,
             config.update_method,
             config.autogenerate_docids,
@@ -117,6 +117,7 @@ where
             config,
             indexer_config,
             progress,
+            should_abort,
             wtxn,
             index,
             added_documents: 0,
@@ -151,12 +152,13 @@ where
             Err(user_error) => return Ok((self, Err(user_error))),
         };
 
-        let indexed_documents = self
-            .transform
-            .as_mut()
-            .expect("Invalid document addition state")
-            .read_documents(enriched_documents_reader, self.wtxn, &self.progress)?
-            as u64;
+        let indexed_documents =
+            self.transform.as_mut().expect("Invalid document addition state").read_documents(
+                enriched_documents_reader,
+                self.wtxn,
+                &self.progress,
+                &self.should_abort,
+            )? as u64;
 
         self.added_documents += indexed_documents;
 
@@ -200,7 +202,8 @@ where
     #[logging_timer::time("IndexDocuments::{}")]
     pub fn execute_raw(self, output: TransformOutput) -> Result<u64>
     where
-        F: Fn(UpdateIndexingStep) + Sync,
+        FP: Fn(UpdateIndexingStep) + Sync,
+        FA: Fn() -> bool + Sync,
     {
         let TransformOutput {
             primary_key,
@@ -291,18 +294,12 @@ where
         // Run extraction pipeline in parallel.
         pool.install(|| {
             // split obkv file into several chunks
-            let original_chunk_iter = grenad_obkv_into_chunks(
-                original_documents,
-                pool_params.clone(),
-                documents_chunk_size,
-            );
+            let original_chunk_iter =
+                grenad_obkv_into_chunks(original_documents, pool_params, documents_chunk_size);
 
             // split obkv file into several chunks
-            let flattened_chunk_iter = grenad_obkv_into_chunks(
-                flattened_documents,
-                pool_params.clone(),
-                documents_chunk_size,
-            );
+            let flattened_chunk_iter =
+                grenad_obkv_into_chunks(flattened_documents, pool_params, documents_chunk_size);
 
             let result = original_chunk_iter.and_then(|original_chunk| {
                 let flattened_chunk = flattened_chunk_iter?;
@@ -341,7 +338,7 @@ where
         }
 
         let index_documents_ids = self.index.documents_ids(self.wtxn)?;
-        let index_is_empty = index_documents_ids.len() == 0;
+        let index_is_empty = index_documents_ids.is_empty();
         let mut final_documents_ids = RoaringBitmap::new();
         let mut word_pair_proximity_docids = None;
         let mut word_position_docids = None;
@@ -355,6 +352,10 @@ where
         });
 
         for result in lmdb_writer_rx {
+            if (self.should_abort)() {
+                return Err(Error::InternalError(InternalError::AbortedIndexation));
+            }
+
             let typed_chunk = match result? {
                 TypedChunk::WordDocids { word_docids_reader, exact_word_docids_reader } => {
                     let cloneable_chunk = unsafe { as_cloneable_grenad(&word_docids_reader)? };
@@ -378,7 +379,7 @@ where
             };
 
             let (docids, is_merged_database) =
-                write_typed_chunk_into_index(typed_chunk, &self.index, self.wtxn, index_is_empty)?;
+                write_typed_chunk_into_index(typed_chunk, self.index, self.wtxn, index_is_empty)?;
             if !docids.is_empty() {
                 final_documents_ids |= docids;
                 let documents_seen_count = final_documents_ids.len();
@@ -431,28 +432,25 @@ where
         word_position_docids: Option<grenad::Reader<CursorClonableMmap>>,
     ) -> Result<()>
     where
-        F: Fn(UpdateIndexingStep) + Sync,
+        FP: Fn(UpdateIndexingStep) + Sync,
+        FA: Fn() -> bool + Sync,
     {
         // Merged databases are already been indexed, we start from this count;
         let mut databases_seen = MERGED_DATABASE_COUNT;
 
-        // Run the facets update operation.
-        let mut builder = Facets::new(self.wtxn, self.index);
-        builder.chunk_compression_type = self.indexer_config.chunk_compression_type;
-        builder.chunk_compression_level = self.indexer_config.chunk_compression_level;
-        if let Some(value) = self.config.facet_level_group_size {
-            builder.level_group_size(value);
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
         }
-        if let Some(value) = self.config.facet_min_level_size {
-            builder.min_level_size(value);
-        }
-        builder.execute()?;
 
         databases_seen += 1;
         (self.progress)(UpdateIndexingStep::MergeDataIntoFinalDatabase {
             databases_seen,
             total_databases: TOTAL_POSTING_DATABASE_COUNT,
         });
+
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
+        }
 
         let previous_words_prefixes_fst =
             self.index.words_prefixes_fst(self.wtxn)?.map_data(|cow| cow.into_owned())?;
@@ -467,6 +465,10 @@ where
         }
         builder.execute()?;
 
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
+        }
+
         let current_prefix_fst = self.index.words_prefixes_fst(self.wtxn)?;
 
         // We retrieve the common words between the previous and new prefix word fst.
@@ -475,7 +477,7 @@ where
         );
         let common_prefix_fst_words: Vec<_> = common_prefix_fst_words
             .as_slice()
-            .linear_group_by_key(|x| x.chars().nth(0).unwrap())
+            .linear_group_by_key(|x| x.chars().next().unwrap())
             .collect();
 
         // We retrieve the newly added words between the previous and new prefix word fst.
@@ -494,13 +496,17 @@ where
             total_databases: TOTAL_POSTING_DATABASE_COUNT,
         });
 
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
+        }
+
         if let Some(word_docids) = word_docids {
             execute_word_prefix_docids(
                 self.wtxn,
                 word_docids,
-                self.index.word_docids.clone(),
-                self.index.word_prefix_docids.clone(),
-                &self.indexer_config,
+                self.index.word_docids,
+                self.index.word_prefix_docids,
+                self.indexer_config,
                 &new_prefix_fst_words,
                 &common_prefix_fst_words,
                 &del_prefix_fst_words,
@@ -511,13 +517,17 @@ where
             execute_word_prefix_docids(
                 self.wtxn,
                 exact_word_docids,
-                self.index.exact_word_docids.clone(),
-                self.index.exact_word_prefix_docids.clone(),
-                &self.indexer_config,
+                self.index.exact_word_docids,
+                self.index.exact_word_prefix_docids,
+                self.indexer_config,
                 &new_prefix_fst_words,
                 &common_prefix_fst_words,
                 &del_prefix_fst_words,
             )?;
+        }
+
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
         }
 
         databases_seen += 1;
@@ -528,17 +538,22 @@ where
 
         if let Some(word_pair_proximity_docids) = word_pair_proximity_docids {
             // Run the word prefix pair proximity docids update operation.
-            let mut builder = WordPrefixPairProximityDocids::new(self.wtxn, self.index);
-            builder.chunk_compression_type = self.indexer_config.chunk_compression_type;
-            builder.chunk_compression_level = self.indexer_config.chunk_compression_level;
-            builder.max_nb_chunks = self.indexer_config.max_nb_chunks;
-            builder.max_memory = self.indexer_config.max_memory;
-            builder.execute(
+            PrefixWordPairsProximityDocids::new(
+                self.wtxn,
+                self.index,
+                self.indexer_config.chunk_compression_type,
+                self.indexer_config.chunk_compression_level,
+            )
+            .execute(
                 word_pair_proximity_docids,
                 &new_prefix_fst_words,
                 &common_prefix_fst_words,
                 &del_prefix_fst_words,
             )?;
+        }
+
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
         }
 
         databases_seen += 1;
@@ -568,6 +583,10 @@ where
             )?;
         }
 
+        if (self.should_abort)() {
+            return Err(Error::InternalError(InternalError::AbortedIndexation));
+        }
+
         databases_seen += 1;
         (self.progress)(UpdateIndexingStep::MergeDataIntoFinalDatabase {
             databases_seen,
@@ -579,6 +598,7 @@ where
 }
 
 /// Run the word prefix docids update operation.
+#[allow(clippy::too_many_arguments)]
 fn execute_word_prefix_docids(
     txn: &mut heed::RwTxn,
     reader: grenad::Reader<Cursor<ClonableMmap>>,
@@ -595,12 +615,7 @@ fn execute_word_prefix_docids(
     builder.chunk_compression_level = indexer_config.chunk_compression_level;
     builder.max_nb_chunks = indexer_config.max_nb_chunks;
     builder.max_memory = indexer_config.max_memory;
-    builder.execute(
-        cursor,
-        &new_prefix_fst_words,
-        &common_prefix_fst_words,
-        &del_prefix_fst_words,
-    )?;
+    builder.execute(cursor, new_prefix_fst_words, common_prefix_fst_words, del_prefix_fst_words)?;
     Ok(())
 }
 
@@ -614,7 +629,7 @@ mod tests {
     use crate::index::tests::TempIndex;
     use crate::search::TermsMatchingStrategy;
     use crate::update::DeleteDocuments;
-    use crate::BEU16;
+    use crate::{db_snap, BEU16};
 
     #[test]
     fn simple_document_replacement() {
@@ -758,7 +773,7 @@ mod tests {
 
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
         let (_id, obkv) = docs.iter().find(|(_id, kv)| kv.get(0) == Some(br#""kevin""#)).unwrap();
-        let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
+        let kevin_uuid: String = serde_json::from_slice(obkv.get(1).unwrap()).unwrap();
         drop(rtxn);
 
         // Second we send 1 document with the generated uuid, to erase the previous ones.
@@ -1401,6 +1416,25 @@ mod tests {
             })
             .unwrap();
 
+        db_snap!(index, facet_id_string_docids, @r###"
+        3   0  first        1  [1, ]
+        3   0  second       1  [2, ]
+        3   0  third        1  [3, ]
+        3   0  zeroth       1  [0, ]
+        "###);
+        db_snap!(index, field_id_docid_facet_strings, @r###"
+        3   0    zeroth       zeroth
+        3   1    first        first
+        3   2    second       second
+        3   3    third        third
+        "###);
+        db_snap!(index, string_faceted_documents_ids, @r###"
+        0   []
+        1   []
+        2   []
+        3   [0, 1, 2, 3, ]
+        "###);
+
         let rtxn = index.read_txn().unwrap();
 
         let hidden = index.faceted_fields(&rtxn).unwrap();
@@ -1421,6 +1455,15 @@ mod tests {
             })
             .unwrap();
 
+        db_snap!(index, facet_id_string_docids, @"");
+        db_snap!(index, field_id_docid_facet_strings, @"");
+        db_snap!(index, string_faceted_documents_ids, @r###"
+        0   []
+        1   []
+        2   []
+        3   [0, 1, 2, 3, ]
+        "###);
+
         let rtxn = index.read_txn().unwrap();
 
         let facets = index.faceted_fields(&rtxn).unwrap();
@@ -1433,6 +1476,25 @@ mod tests {
                 settings.set_sortable_fields(hashset!(S("dog.race")));
             })
             .unwrap();
+
+        db_snap!(index, facet_id_string_docids, @r###"
+        3   0  first        1  [1, ]
+        3   0  second       1  [2, ]
+        3   0  third        1  [3, ]
+        3   0  zeroth       1  [0, ]
+        "###);
+        db_snap!(index, field_id_docid_facet_strings, @r###"
+        3   0    zeroth       zeroth
+        3   1    first        first
+        3   2    second       second
+        3   3    third        third
+        "###);
+        db_snap!(index, string_faceted_documents_ids, @r###"
+        0   []
+        1   []
+        2   []
+        3   [0, 1, 2, 3, ]
+        "###);
 
         let rtxn = index.read_txn().unwrap();
 
@@ -1750,7 +1812,7 @@ mod tests {
         let long_word = "lol".repeat(1000);
         let doc1 = documents! {[{
             "id": "1",
-            "title": long_word.clone(),
+            "title": long_word,
         }]};
 
         index.add_documents(doc1).unwrap();

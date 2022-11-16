@@ -80,7 +80,7 @@ pub fn extract_docid_word_positions<R: io::Read + io::Seek>(
                                 .map_err(|_| SerializationError::InvalidNumberSerialization)?;
                             let position = absolute_from_relative_position(field_id, position);
                             docid_word_positions_sorter
-                                .insert(&key_buffer, &position.to_ne_bytes())?;
+                                .insert(&key_buffer, position.to_ne_bytes())?;
                         }
                     }
                 }
@@ -132,7 +132,7 @@ fn json_to_string<'a>(value: &'a Value, buffer: &'a mut String) -> Option<&'a st
     }
 
     if let Value::String(string) = value {
-        Some(&string)
+        Some(string)
     } else if inner(value, buffer) {
         Some(buffer)
     } else {

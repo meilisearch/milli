@@ -89,7 +89,7 @@ mod test {
         let config = IndexerConfig::default();
         let mut update = Settings::new(&mut txn, &index, &config);
         update.set_distinct_field(distinct.to_string());
-        update.execute(|_| ()).unwrap();
+        update.execute(|_| (), || false).unwrap();
 
         // add documents to the index
         let config = IndexerConfig::default();
@@ -98,7 +98,8 @@ mod test {
             ..Default::default()
         };
         let addition =
-            IndexDocuments::new(&mut txn, &index, &config, indexing_config, |_| ()).unwrap();
+            IndexDocuments::new(&mut txn, &index, &config, indexing_config, |_| (), || false)
+                .unwrap();
 
         let reader =
             crate::documents::DocumentsBatchReader::from_reader(Cursor::new(JSON.as_slice()))
@@ -109,7 +110,7 @@ mod test {
         addition.execute().unwrap();
 
         let fields_map = index.fields_ids_map(&txn).unwrap();
-        let fid = fields_map.id(&distinct).unwrap();
+        let fid = fields_map.id(distinct).unwrap();
 
         let documents = DocumentsBatchReader::from_reader(Cursor::new(JSON.as_slice())).unwrap();
         let map = (0..documents.documents_count() as u32).collect();
@@ -132,7 +133,7 @@ mod test {
                     let s = value.to_string();
                     assert!(seen.insert(s));
                 }
-                Value::Array(values) => values.into_iter().for_each(|value| test(seen, value)),
+                Value::Array(values) => values.iter().for_each(|value| test(seen, value)),
             }
         }
 

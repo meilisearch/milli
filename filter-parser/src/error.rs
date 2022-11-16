@@ -65,6 +65,7 @@ pub enum ErrorKind<'a> {
     MalformedValue,
     InOpeningBracket,
     InClosingBracket,
+    NonFiniteFloat,
     InExpectedValue(ExpectedValueKind),
     ReservedKeyword(String),
     MissingClosingDelimiter(char),
@@ -141,10 +142,10 @@ impl<'a> Display for Error<'a> {
                 writeln!(f, "Expression `{}` is missing the following closing delimiter: `{}`.", escaped_input, c)?
             }
             ErrorKind::InvalidPrimary if input.trim().is_empty() => {
-                writeln!(f, "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` but instead got nothing.")?
+                writeln!(f, "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` but instead got nothing.")?
             }
             ErrorKind::InvalidPrimary => {
-                writeln!(f, "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `{}`.", escaped_input)?
+                writeln!(f, "Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `{}`.", escaped_input)?
             }
             ErrorKind::ExpectedEof => {
                 writeln!(f, "Found unexpected characters at the end of the filter: `{}`. You probably forgot an `OR` or an `AND` rule.", escaped_input)?
@@ -166,6 +167,9 @@ impl<'a> Display for Error<'a> {
             }
             ErrorKind::InClosingBracket => {
                 writeln!(f, "Expected matching `]` after the list of field names given to `IN[`")?
+            }
+            ErrorKind::NonFiniteFloat => {
+                writeln!(f, "Non finite floats are not supported")?
             }
             ErrorKind::InExpectedValue(ExpectedValueKind::ReservedKeyword) => {
                 writeln!(f, "Expected only comma-separated field names inside `IN[..]` but instead found `{escaped_input}`, which is a keyword. To use `{escaped_input}` as a field name or a value, surround it by quotes.")?

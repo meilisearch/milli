@@ -72,10 +72,10 @@ fn create_fields_mapping(
         // we sort by id here to ensure a deterministic mapping of the fields, that preserves
         // the original ordering.
         .sorted_by_key(|(&id, _)| id)
-        .map(|(field, name)| match index_field_map.id(&name) {
+        .map(|(field, name)| match index_field_map.id(name) {
             Some(id) => Ok((*field, id)),
             None => index_field_map
-                .insert(&name)
+                .insert(name)
                 .ok_or(Error::UserError(UserError::AttributeLimitReached))
                 .map(|id| (*field, id)),
         })
@@ -138,15 +138,17 @@ impl<'a, 'i> Transform<'a, 'i> {
         })
     }
 
-    pub fn read_documents<R, F>(
+    pub fn read_documents<R, FP, FA>(
         &mut self,
         reader: EnrichedDocumentsBatchReader<R>,
         wtxn: &mut heed::RwTxn,
-        progress_callback: F,
+        progress_callback: FP,
+        should_abort: FA,
     ) -> Result<usize>
     where
         R: Read + Seek,
-        F: Fn(UpdateIndexingStep) + Sync,
+        FP: Fn(UpdateIndexingStep) + Sync,
+        FA: Fn() -> bool + Sync,
     {
         let (mut cursor, fields_index) = reader.into_cursor_and_fields_index();
 
@@ -164,6 +166,10 @@ impl<'a, 'i> Transform<'a, 'i> {
         let mut field_buffer: Vec<(u16, Cow<[u8]>)> = Vec::new();
         while let Some(enriched_document) = cursor.next_enriched_document()? {
             let EnrichedDocument { document, document_id } = enriched_document;
+
+            if should_abort() {
+                return Err(Error::InternalError(InternalError::AbortedIndexation));
+            }
 
             // drop_and_reuse is called instead of .clear() to communicate to the compiler that field_buffer
             // does not keep references from the cursor between loop iterations
@@ -192,7 +198,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             // Insertion in a obkv need to be done with keys ordered. For now they are ordered
             // according to the document addition key order, so we sort it according to the
             // fieldids map keys order.
-            field_buffer_cache.sort_unstable_by(|(f1, _), (f2, _)| f1.cmp(&f2));
+            field_buffer_cache.sort_unstable_by(|(f1, _), (f2, _)| f1.cmp(f2));
 
             // Build the new obkv document.
             let mut writer = obkv::KvWriter::new(&mut obkv_buffer);
@@ -202,24 +208,23 @@ impl<'a, 'i> Transform<'a, 'i> {
 
             let mut original_docid = None;
 
-            let docid =
-                match self.new_external_documents_ids_builder.entry(external_id.clone().into()) {
-                    Entry::Occupied(entry) => *entry.get() as u32,
-                    Entry::Vacant(entry) => {
-                        // If the document was already in the db we mark it as a replaced document.
-                        // It'll be deleted later. We keep its original docid to insert it in the grenad.
-                        if let Some(docid) = external_documents_ids.get(entry.key()) {
-                            self.replaced_documents_ids.insert(docid);
-                            original_docid = Some(docid);
-                        }
-                        let docid = self
-                            .available_documents_ids
-                            .next()
-                            .ok_or(UserError::DocumentLimitReached)?;
-                        entry.insert(docid as u64);
-                        docid
+            let docid = match self.new_external_documents_ids_builder.entry((*external_id).into()) {
+                Entry::Occupied(entry) => *entry.get() as u32,
+                Entry::Vacant(entry) => {
+                    // If the document was already in the db we mark it as a replaced document.
+                    // It'll be deleted later. We keep its original docid to insert it in the grenad.
+                    if let Some(docid) = external_documents_ids.get(entry.key()) {
+                        self.replaced_documents_ids.insert(docid);
+                        original_docid = Some(docid);
                     }
-                };
+                    let docid = self
+                        .available_documents_ids
+                        .next()
+                        .ok_or(UserError::DocumentLimitReached)?;
+                    entry.insert(docid as u64);
+                    docid
+                }
+            };
 
             let mut skip_insertion = false;
             if let Some(original_docid) = original_docid {
@@ -239,12 +244,12 @@ impl<'a, 'i> Transform<'a, 'i> {
                     // we're not replacing anything
                     self.replaced_documents_ids.remove(original_docid);
                     // and we need to put back the original id as it was before
-                    self.new_external_documents_ids_builder.remove(&*external_id);
+                    self.new_external_documents_ids_builder.remove(external_id);
                     skip_insertion = true;
                 } else {
                     // we associate the base document with the new key, everything will get merged later.
-                    self.original_sorter.insert(&docid.to_be_bytes(), base_obkv)?;
-                    match self.flatten_from_fields_ids_map(KvReader::new(&base_obkv))? {
+                    self.original_sorter.insert(docid.to_be_bytes(), base_obkv)?;
+                    match self.flatten_from_fields_ids_map(KvReader::new(base_obkv))? {
                         Some(buffer) => {
                             self.flattened_sorter.insert(docid.to_be_bytes(), &buffer)?
                         }
@@ -256,7 +261,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             if !skip_insertion {
                 self.new_documents_ids.insert(docid);
                 // We use the extracted/generated user id as the key for this document.
-                self.original_sorter.insert(&docid.to_be_bytes(), obkv_buffer.clone())?;
+                self.original_sorter.insert(docid.to_be_bytes(), obkv_buffer.clone())?;
 
                 match self.flatten_from_fields_ids_map(KvReader::new(&obkv_buffer))? {
                     Some(buffer) => self.flattened_sorter.insert(docid.to_be_bytes(), &buffer)?,
@@ -453,7 +458,7 @@ impl<'a, 'i> Transform<'a, 'i> {
     {
         let primary_key = self
             .index
-            .primary_key(&wtxn)?
+            .primary_key(wtxn)?
             .ok_or(Error::UserError(UserError::MissingPrimaryKey))?
             .to_string();
 
@@ -520,7 +525,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             self.new_external_documents_ids_builder.into_iter().collect();
 
         new_external_documents_ids_builder
-            .sort_unstable_by(|(left, _), (right, _)| left.cmp(&right));
+            .sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
         let mut fst_new_external_documents_ids_builder = fst::MapBuilder::memory();
         new_external_documents_ids_builder.into_iter().try_for_each(|(key, value)| {
             fst_new_external_documents_ids_builder.insert(key, value)
@@ -573,9 +578,8 @@ impl<'a, 'i> Transform<'a, 'i> {
         );
 
         let mut obkv_buffer = Vec::new();
-        for result in self.index.documents.iter(wtxn)? {
+        for result in self.index.all_documents(wtxn)? {
             let (docid, obkv) = result?;
-            let docid = docid.get();
 
             obkv_buffer.clear();
             let mut obkv_writer = obkv::KvWriter::<_, FieldId>::new(&mut obkv_buffer);
@@ -614,7 +618,7 @@ impl<'a, 'i> Transform<'a, 'i> {
             let mut flattened: Vec<_> = flattened.into_iter().collect();
             // we reorder the field to get all the known field first
             flattened.sort_unstable_by_key(|(key, _)| {
-                new_fields_ids_map.id(&key).unwrap_or(FieldId::MAX)
+                new_fields_ids_map.id(key).unwrap_or(FieldId::MAX)
             });
 
             for (key, value) in flattened {

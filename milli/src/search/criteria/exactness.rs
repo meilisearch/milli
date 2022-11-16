@@ -7,7 +7,7 @@ use log::debug;
 use roaring::RoaringBitmap;
 
 use crate::search::criteria::{
-    resolve_query_tree, Context, Criterion, CriterionParameters, CriterionResult,
+    resolve_phrase, resolve_query_tree, Context, Criterion, CriterionParameters, CriterionResult,
 };
 use crate::search::query_tree::{Operation, PrimitiveQueryPart};
 use crate::{absolute_from_relative_position, FieldId, Result};
@@ -226,19 +226,7 @@ fn resolve_state(
                     }
                     // compute intersection on pair of words with a proximity of 0.
                     Phrase(phrase) => {
-                        let mut bitmaps = Vec::with_capacity(phrase.len().saturating_sub(1));
-                        for words in phrase.windows(2) {
-                            if let [left, right] = words {
-                                match ctx.word_pair_proximity_docids(left, right, 0)? {
-                                    Some(docids) => bitmaps.push(docids),
-                                    None => {
-                                        bitmaps.clear();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        candidates |= intersection_of(bitmaps.iter().collect());
+                        candidates |= resolve_phrase(ctx, phrase)?;
                     }
                 }
                 parts_candidates_array.push(candidates);
@@ -311,9 +299,11 @@ fn attribute_start_with_docids(
             }
             Phrase(phrase) => {
                 for word in phrase {
-                    let wc = ctx.word_position_docids(word, pos)?;
-                    if let Some(word_candidates) = wc {
-                        attribute_candidates_array.push(word_candidates);
+                    if let Some(word) = word {
+                        let wc = ctx.word_position_docids(word, pos)?;
+                        if let Some(word_candidates) = wc {
+                            attribute_candidates_array.push(word_candidates);
+                        }
                     }
                     pos += 1;
                 }
@@ -335,7 +325,7 @@ fn intersection_of(mut rbs: Vec<&RoaringBitmap>) -> RoaringBitmap {
 
 #[derive(Debug, Clone)]
 pub enum ExactQueryPart {
-    Phrase(Vec<String>),
+    Phrase(Vec<Option<String>>),
     Synonyms(Vec<String>),
 }
 

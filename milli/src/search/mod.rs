@@ -15,7 +15,7 @@ use log::debug;
 use once_cell::sync::Lazy;
 use roaring::bitmap::RoaringBitmap;
 
-pub use self::facet::{FacetDistribution, FacetNumberIter, Filter, DEFAULT_VALUES_PER_FACET};
+pub use self::facet::{FacetDistribution, Filter, DEFAULT_VALUES_PER_FACET};
 use self::fst_utils::{Complement, Intersection, StartsWith, Union};
 pub use self::matches::{
     FormatOptions, MatchBounds, Matcher, MatcherBuilder, MatchingWord, MatchingWords,
@@ -32,7 +32,7 @@ static LEVDIST2: Lazy<LevBuilder> = Lazy::new(|| LevBuilder::new(2, true));
 
 mod criteria;
 mod distinct;
-mod facet;
+pub mod facet;
 mod fst_utils;
 mod matches;
 mod query_tree;
@@ -47,6 +47,7 @@ pub struct Search<'a> {
     terms_matching_strategy: TermsMatchingStrategy,
     authorize_typos: bool,
     words_limit: usize,
+    exhaustive_number_hits: bool,
     rtxn: &'a heed::RoTxn<'a>,
     index: &'a Index,
 }
@@ -61,6 +62,7 @@ impl<'a> Search<'a> {
             sort_criteria: None,
             terms_matching_strategy: TermsMatchingStrategy::default(),
             authorize_typos: true,
+            exhaustive_number_hits: false,
             words_limit: 10,
             rtxn,
             index,
@@ -104,6 +106,13 @@ impl<'a> Search<'a> {
 
     pub fn filter(&mut self, condition: Filter<'a>) -> &mut Search<'a> {
         self.filter = Some(condition);
+        self
+    }
+
+    /// Force the search to exhastivelly compute the number of candidates,
+    /// this will increase the search time but allows finite pagination.
+    pub fn exhaustive_number_hits(&mut self, exhaustive_number_hits: bool) -> &mut Search<'a> {
+        self.exhaustive_number_hits = exhaustive_number_hits;
         self
     }
 
@@ -184,20 +193,33 @@ impl<'a> Search<'a> {
         }
 
         let criteria_builder = criteria::CriteriaBuilder::new(self.rtxn, self.index)?;
-        let criteria = criteria_builder.build(
-            query_tree,
-            primitive_query,
-            filtered_candidates,
-            self.sort_criteria.clone(),
-        )?;
 
         match self.index.distinct_field(self.rtxn)? {
-            None => self.perform_sort(NoopDistinct, matching_words.unwrap_or_default(), criteria),
+            None => {
+                let criteria = criteria_builder.build::<NoopDistinct>(
+                    query_tree,
+                    primitive_query,
+                    filtered_candidates,
+                    self.sort_criteria.clone(),
+                    self.exhaustive_number_hits,
+                    None,
+                )?;
+                self.perform_sort(NoopDistinct, matching_words.unwrap_or_default(), criteria)
+            }
             Some(name) => {
                 let field_ids_map = self.index.fields_ids_map(self.rtxn)?;
                 match field_ids_map.id(name) {
                     Some(fid) => {
                         let distinct = FacetDistinct::new(fid, self.index, self.rtxn);
+
+                        let criteria = criteria_builder.build(
+                            query_tree,
+                            primitive_query,
+                            filtered_candidates,
+                            self.sort_criteria.clone(),
+                            self.exhaustive_number_hits,
+                            Some(distinct.clone()),
+                        )?;
                         self.perform_sort(distinct, matching_words.unwrap_or_default(), criteria)
                     }
                     None => Ok(SearchResult::default()),
@@ -262,6 +284,7 @@ impl fmt::Debug for Search<'_> {
             terms_matching_strategy,
             authorize_typos,
             words_limit,
+            exhaustive_number_hits,
             rtxn: _,
             index: _,
         } = self;
@@ -273,6 +296,7 @@ impl fmt::Debug for Search<'_> {
             .field("sort_criteria", sort_criteria)
             .field("terms_matching_strategy", terms_matching_strategy)
             .field("authorize_typos", authorize_typos)
+            .field("exhaustive_number_hits", exhaustive_number_hits)
             .field("words_limit", words_limit)
             .finish()
     }
@@ -333,39 +357,36 @@ pub fn word_derivations<'c>(
                 } else if fst.contains(word) {
                     derived_words.push((word.to_string(), 0));
                 }
+            } else if max_typo == 1 {
+                let dfa = build_dfa(word, 1, is_prefix);
+                let starts = StartsWith(Str::new(get_first(word)));
+                let mut stream = fst.search_with_state(Intersection(starts, &dfa)).into_stream();
+
+                while let Some((word, state)) = stream.next() {
+                    let word = std::str::from_utf8(word)?;
+                    let d = dfa.distance(state.1);
+                    derived_words.push((word.to_string(), d.to_u8()));
+                }
             } else {
-                if max_typo == 1 {
-                    let dfa = build_dfa(word, 1, is_prefix);
-                    let starts = StartsWith(Str::new(get_first(word)));
-                    let mut stream =
-                        fst.search_with_state(Intersection(starts, &dfa)).into_stream();
+                let starts = StartsWith(Str::new(get_first(word)));
+                let first = Intersection(build_dfa(word, 1, is_prefix), Complement(&starts));
+                let second_dfa = build_dfa(word, 2, is_prefix);
+                let second = Intersection(&second_dfa, &starts);
+                let automaton = Union(first, &second);
 
-                    while let Some((word, state)) = stream.next() {
-                        let word = std::str::from_utf8(word)?;
-                        let d = dfa.distance(state.1);
-                        derived_words.push((word.to_string(), d.to_u8()));
-                    }
-                } else {
-                    let starts = StartsWith(Str::new(get_first(word)));
-                    let first = Intersection(build_dfa(word, 1, is_prefix), Complement(&starts));
-                    let second_dfa = build_dfa(word, 2, is_prefix);
-                    let second = Intersection(&second_dfa, &starts);
-                    let automaton = Union(first, &second);
+                let mut stream = fst.search_with_state(automaton).into_stream();
 
-                    let mut stream = fst.search_with_state(automaton).into_stream();
-
-                    while let Some((found_word, state)) = stream.next() {
-                        let found_word = std::str::from_utf8(found_word)?;
-                        // in the case the typo is on the first letter, we know the number of typo
-                        // is two
-                        if get_first(found_word) != get_first(word) {
-                            derived_words.push((found_word.to_string(), 2));
-                        } else {
-                            // Else, we know that it is the second dfa that matched and compute the
-                            // correct distance
-                            let d = second_dfa.distance((state.1).0);
-                            derived_words.push((found_word.to_string(), d.to_u8()));
-                        }
+                while let Some((found_word, state)) = stream.next() {
+                    let found_word = std::str::from_utf8(found_word)?;
+                    // in the case the typo is on the first letter, we know the number of typo
+                    // is two
+                    if get_first(found_word) != get_first(word) {
+                        derived_words.push((found_word.to_string(), 2));
+                    } else {
+                        // Else, we know that it is the second dfa that matched and compute the
+                        // correct distance
+                        let d = second_dfa.distance((state.1).0);
+                        derived_words.push((found_word.to_string(), d.to_u8()));
                     }
                 }
             }

@@ -44,7 +44,6 @@ mod error;
 mod value;
 
 use std::fmt::Debug;
-use std::str::FromStr;
 
 pub use condition::{parse_condition, parse_to, Condition};
 use condition::{parse_exists, parse_not_exists};
@@ -100,12 +99,13 @@ impl<'a> Token<'a> {
         Error::new_from_external(self.span, error)
     }
 
-    pub fn parse<T>(&self) -> Result<T, Error>
-    where
-        T: FromStr,
-        T::Err: std::error::Error,
-    {
-        self.span.parse().map_err(|e| self.as_external_error(e))
+    pub fn parse_finite_float(&self) -> Result<f64, Error> {
+        let value: f64 = self.span.parse().map_err(|e| self.as_external_error(e))?;
+        if value.is_finite() {
+            Ok(value)
+        } else {
+            Err(Error::new_from_kind(self.span, ErrorKind::NonFiniteFloat))
+        }
     }
 }
 
@@ -168,7 +168,7 @@ fn ws<'a, O>(inner: impl FnMut(Span<'a>) -> IResult<O>) -> impl FnMut(Span<'a>) 
 }
 
 /// value_list = (value ("," value)* ","?)?
-fn parse_value_list<'a>(input: Span<'a>) -> IResult<Vec<Token<'a>>> {
+fn parse_value_list(input: Span) -> IResult<Vec<Token>> {
     let (input, first_value) = opt(parse_value)(input)?;
     if let Some(first_value) = first_value {
         let value_list_el_parser = preceded(ws(tag(",")), parse_value);
@@ -335,13 +335,11 @@ fn parse_error_reserved_keyword(input: Span) -> IResult<FilterCondition> {
         Ok(result) => Ok(result),
         Err(nom::Err::Error(inner) | nom::Err::Failure(inner)) => match inner.kind() {
             ErrorKind::ExpectedValue(ExpectedValueKind::ReservedKeyword) => {
-                return Err(nom::Err::Failure(inner));
+                Err(nom::Err::Failure(inner))
             }
-            _ => return Err(nom::Err::Error(inner)),
+            _ => Err(nom::Err::Error(inner)),
         },
-        Err(e) => {
-            return Err(e);
-        }
+        Err(e) => Err(e),
     }
 }
 
@@ -401,7 +399,7 @@ pub mod tests {
     fn parse() {
         use FilterCondition as Fc;
 
-        fn p<'a>(s: &'a str) -> impl std::fmt::Display + 'a {
+        fn p(s: &str) -> impl std::fmt::Display + '_ {
             Fc::parse(s).unwrap().unwrap()
         }
 
@@ -494,7 +492,7 @@ pub mod tests {
     fn error() {
         use FilterCondition as Fc;
 
-        fn p<'a>(s: &'a str) -> impl std::fmt::Display + 'a {
+        fn p(s: &str) -> impl std::fmt::Display + '_ {
             Fc::parse(s).unwrap_err().to_string()
         }
 
@@ -519,7 +517,7 @@ pub mod tests {
         "###);
 
         insta::assert_display_snapshot!(p("'OR'"), @r###"
-        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `\'OR\'`.
+        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `\'OR\'`.
         1:5 'OR'
         "###);
 
@@ -529,12 +527,12 @@ pub mod tests {
         "###);
 
         insta::assert_display_snapshot!(p("channel Ponce"), @r###"
-        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `channel Ponce`.
+        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `channel Ponce`.
         1:14 channel Ponce
         "###);
 
         insta::assert_display_snapshot!(p("channel = Ponce OR"), @r###"
-        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` but instead got nothing.
+        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` but instead got nothing.
         19:19 channel = Ponce OR
         "###);
 
@@ -584,12 +582,12 @@ pub mod tests {
         "###);
 
         insta::assert_display_snapshot!(p("colour NOT EXIST"), @r###"
-        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `colour NOT EXIST`.
+        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `colour NOT EXIST`.
         1:17 colour NOT EXIST
         "###);
 
         insta::assert_display_snapshot!(p("subscribers 100 TO1000"), @r###"
-        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `subscribers 100 TO1000`.
+        Was expecting an operation `=`, `!=`, `>=`, `>`, `<=`, `<`, `IN`, `NOT IN`, `TO`, `EXISTS`, `NOT EXISTS`, or `_geoRadius` at `subscribers 100 TO1000`.
         1:23 subscribers 100 TO1000
         "###);
 

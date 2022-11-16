@@ -1,16 +1,15 @@
 use std::borrow::Cow;
 use std::cmp::max;
-use std::{cmp, fmt, mem};
+use std::{fmt, mem};
 
 use charabia::classifier::ClassifiedTokenIter;
 use charabia::{SeparatorKind, TokenKind};
-use fst::Set;
 use roaring::RoaringBitmap;
 use slice_group_by::GroupBy;
 
 use crate::search::matches::matching_words::{MatchingWord, PrimitiveWordId};
 use crate::search::TermsMatchingStrategy;
-use crate::{Index, MatchingWords, Result};
+use crate::{CboRoaringBitmapLenCodec, Index, MatchingWords, Result};
 
 type IsOptionalWord = bool;
 type IsPrefix = bool;
@@ -18,8 +17,9 @@ type IsPrefix = bool;
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Operation {
     And(Vec<Operation>),
-    // serie of consecutive non prefix and exact words
-    Phrase(Vec<String>),
+    // series of consecutive non prefix and exact words
+    // `None` means a stop word.
+    Phrase(Vec<Option<String>>),
     Or(IsOptionalWord, Vec<Operation>),
     Query(Query),
 }
@@ -75,9 +75,13 @@ impl Operation {
         }
     }
 
-    fn phrase(mut words: Vec<String>) -> Self {
+    fn phrase(mut words: Vec<Option<String>>) -> Self {
         if words.len() == 1 {
-            Self::Query(Query { prefix: false, kind: QueryKind::exact(words.pop().unwrap()) })
+            if let Some(word) = words.pop().unwrap() {
+                Self::Query(Query { prefix: false, kind: QueryKind::exact(word) })
+            } else {
+                Self::Phrase(words)
+            }
         } else {
             Self::Phrase(words)
         }
@@ -156,6 +160,12 @@ trait Context {
     /// Returns the minimum word len for 1 and 2 typos.
     fn min_word_len_for_typo(&self) -> heed::Result<(u8, u8)>;
     fn exact_words(&self) -> Option<&fst::Set<Cow<[u8]>>>;
+    fn word_pair_frequency(
+        &self,
+        left_word: &str,
+        right_word: &str,
+        proximity: u8,
+    ) -> heed::Result<Option<u64>>;
 }
 
 /// The query tree builder is the interface to build a query tree.
@@ -182,13 +192,26 @@ impl<'a> Context for QueryTreeBuilder<'a> {
     }
 
     fn min_word_len_for_typo(&self) -> heed::Result<(u8, u8)> {
-        let one = self.index.min_word_len_one_typo(&self.rtxn)?;
-        let two = self.index.min_word_len_two_typos(&self.rtxn)?;
+        let one = self.index.min_word_len_one_typo(self.rtxn)?;
+        let two = self.index.min_word_len_two_typos(self.rtxn)?;
         Ok((one, two))
     }
 
     fn exact_words(&self) -> Option<&fst::Set<Cow<[u8]>>> {
         self.exact_words.as_ref()
+    }
+
+    fn word_pair_frequency(
+        &self,
+        left_word: &str,
+        right_word: &str,
+        proximity: u8,
+    ) -> heed::Result<Option<u64>> {
+        let key = (proximity, left_word, right_word);
+        self.index
+            .word_pair_proximity_docids
+            .remap_data_type::<CboRoaringBitmapLenCodec>()
+            .get(self.rtxn, &key)
     }
 }
 
@@ -245,8 +268,7 @@ impl<'a> QueryTreeBuilder<'a> {
         &self,
         query: ClassifiedTokenIter<A>,
     ) -> Result<Option<(Operation, PrimitiveQuery, MatchingWords)>> {
-        let stop_words = self.index.stop_words(self.rtxn)?;
-        let primitive_query = create_primitive_query(query, stop_words, self.words_limit);
+        let primitive_query = create_primitive_query(query, self.words_limit);
         if !primitive_query.is_empty() {
             let qt = create_query_tree(
                 self,
@@ -263,7 +285,7 @@ impl<'a> QueryTreeBuilder<'a> {
     }
 }
 
-/// Split the word depending on the frequency of subwords in the database documents.
+/// Split the word depending on the frequency of pairs near together in the database documents.
 fn split_best_frequency<'a>(
     ctx: &impl Context,
     word: &'a str,
@@ -274,12 +296,10 @@ fn split_best_frequency<'a>(
     for (i, _) in chars {
         let (left, right) = word.split_at(i);
 
-        let left_freq = ctx.word_documents_count(left)?.unwrap_or(0);
-        let right_freq = ctx.word_documents_count(right)?.unwrap_or(0);
+        let pair_freq = ctx.word_pair_frequency(left, right, 1)?.unwrap_or(0);
 
-        let min_freq = cmp::min(left_freq, right_freq);
-        if min_freq != 0 && best.map_or(true, |(old, _, _)| min_freq > old) {
-            best = Some((min_freq, left, right));
+        if pair_freq != 0 && best.map_or(true, |(old, _, _)| pair_freq > old) {
+            best = Some((pair_freq, left, right));
         }
     }
 
@@ -296,7 +316,7 @@ pub struct TypoConfig<'a> {
 
 /// Return the `QueryKind` of a word depending on `authorize_typos`
 /// and the provided word length.
-fn typos<'a>(word: String, authorize_typos: bool, config: TypoConfig<'a>) -> QueryKind {
+fn typos(word: String, authorize_typos: bool, config: TypoConfig) -> QueryKind {
     if authorize_typos && !config.exact_words.map_or(false, |s| s.contains(&word)) {
         let count = word.chars().count().min(u8::MAX as usize) as u8;
         if count < config.word_len_one_typo {
@@ -353,7 +373,10 @@ fn create_query_tree(
             PrimitiveQueryPart::Word(word, prefix) => {
                 let mut children = synonyms(ctx, &[&word])?.unwrap_or_default();
                 if let Some((left, right)) = split_best_frequency(ctx, &word)? {
-                    children.push(Operation::Phrase(vec![left.to_string(), right.to_string()]));
+                    children.push(Operation::Phrase(vec![
+                        Some(left.to_string()),
+                        Some(right.to_string()),
+                    ]));
                 }
                 let (word_len_one_typo, word_len_two_typo) = ctx.min_word_len_for_typo()?;
                 let exact_words = ctx.exact_words();
@@ -539,7 +562,7 @@ fn create_matching_words(
                     for synonym in synonyms {
                         let synonym = synonym
                             .into_iter()
-                            .map(|syn| MatchingWord::new(syn.to_string(), 0, false))
+                            .map(|syn| MatchingWord::new(syn, 0, false))
                             .collect();
                         matching_words.push((synonym, vec![id]));
                     }
@@ -567,7 +590,7 @@ fn create_matching_words(
                 let ids: Vec<_> =
                     (0..words.len()).into_iter().map(|i| id + i as PrimitiveWordId).collect();
                 let words =
-                    words.into_iter().map(|w| MatchingWord::new(w.to_string(), 0, false)).collect();
+                    words.into_iter().flatten().map(|w| MatchingWord::new(w, 0, false)).collect();
                 matching_words.push((words, ids));
             }
         }
@@ -622,7 +645,7 @@ fn create_matching_words(
                                 for synonym in synonyms {
                                     let synonym = synonym
                                         .into_iter()
-                                        .map(|syn| MatchingWord::new(syn.to_string(), 0, false))
+                                        .map(|syn| MatchingWord::new(syn, 0, false))
                                         .collect();
                                     matching_words.push((synonym, ids.clone()));
                                 }
@@ -669,7 +692,7 @@ pub type PrimitiveQuery = Vec<PrimitiveQueryPart>;
 
 #[derive(Debug, Clone)]
 pub enum PrimitiveQueryPart {
-    Phrase(Vec<String>),
+    Phrase(Vec<Option<String>>),
     Word(String, IsPrefix),
 }
 
@@ -694,7 +717,6 @@ impl PrimitiveQueryPart {
 /// the primitive query is an intermediate state to build the query tree.
 fn create_primitive_query<A>(
     query: ClassifiedTokenIter<A>,
-    stop_words: Option<Set<&[u8]>>,
     words_limit: Option<usize>,
 ) -> PrimitiveQuery
 where
@@ -719,9 +741,14 @@ where
                 // 2. if the word is not the last token of the query and is not a stop_word we push it as a non-prefix word,
                 // 3. if the word is the last token of the query we push it as a prefix word.
                 if quoted {
-                    phrase.push(token.lemma().to_string());
+                    if let TokenKind::StopWord = token.kind {
+                        phrase.push(None)
+                    } else {
+                        phrase.push(Some(token.lemma().to_string()));
+                    }
                 } else if peekable.peek().is_some() {
-                    if !stop_words.as_ref().map_or(false, |swords| swords.contains(token.lemma())) {
+                    if let TokenKind::StopWord = token.kind {
+                    } else {
                         primitive_query
                             .push(PrimitiveQueryPart::Word(token.lemma().to_string(), false));
                     }
@@ -804,7 +831,7 @@ mod test {
             words_limit: Option<usize>,
             query: ClassifiedTokenIter<A>,
         ) -> Result<Option<(Operation, PrimitiveQuery)>> {
-            let primitive_query = create_primitive_query(query, None, words_limit);
+            let primitive_query = create_primitive_query(query, words_limit);
             if !primitive_query.is_empty() {
                 let qt = create_query_tree(
                     self,
@@ -835,6 +862,18 @@ mod test {
 
         fn exact_words(&self) -> Option<&fst::Set<Cow<[u8]>>> {
             self.exact_words.as_ref()
+        }
+
+        fn word_pair_frequency(
+            &self,
+            left_word: &str,
+            right_word: &str,
+            _proximity: u8,
+        ) -> heed::Result<Option<u64>> {
+            match self.word_docids(&format!("{} {}", left_word, right_word))? {
+                Some(rb) => Ok(Some(rb.len())),
+                None => Ok(None),
+            }
         }
     }
 
@@ -881,19 +920,22 @@ mod test {
                     ],
                 },
                 postings: hashmap! {
-                    String::from("hello")      => random_postings(rng,   1500),
-                    String::from("hi")         => random_postings(rng,   4000),
-                    String::from("word")       => random_postings(rng,   2500),
-                    String::from("split")      => random_postings(rng,    400),
-                    String::from("ngrams")     => random_postings(rng,   1400),
-                    String::from("world")      => random_postings(rng, 15_000),
-                    String::from("earth")      => random_postings(rng,   8000),
-                    String::from("2021")       => random_postings(rng,    100),
-                    String::from("2020")       => random_postings(rng,    500),
-                    String::from("is")         => random_postings(rng, 50_000),
-                    String::from("this")       => random_postings(rng, 50_000),
-                    String::from("good")       => random_postings(rng,   1250),
-                    String::from("morning")    => random_postings(rng,    125),
+                    String::from("hello")           => random_postings(rng,   1500),
+                    String::from("hi")              => random_postings(rng,   4000),
+                    String::from("word")            => random_postings(rng,   2500),
+                    String::from("split")           => random_postings(rng,    400),
+                    String::from("ngrams")          => random_postings(rng,   1400),
+                    String::from("world")           => random_postings(rng, 15_000),
+                    String::from("earth")           => random_postings(rng,   8000),
+                    String::from("2021")            => random_postings(rng,    100),
+                    String::from("2020")            => random_postings(rng,    500),
+                    String::from("is")              => random_postings(rng, 50_000),
+                    String::from("this")            => random_postings(rng, 50_000),
+                    String::from("good")            => random_postings(rng,   1250),
+                    String::from("morning")         => random_postings(rng,    125),
+                    String::from("word split")      => random_postings(rng,   5000),
+                    String::from("quick brownfox")  => random_postings(rng,   7000),
+                    String::from("quickbrown fox")  => random_postings(rng,   8000),
                 },
                 exact_words,
             }
@@ -1034,10 +1076,27 @@ mod test {
         OR
           AND
             OR
-              PHRASE ["word", "split"]
+              PHRASE [Some("word"), Some("split")]
               Tolerant { word: "wordsplit", max typo: 2 }
             Exact { word: "fish" }
           Tolerant { word: "wordsplitfish", max typo: 1 }
+        "###);
+    }
+
+    #[test]
+    fn word_split_choose_pair_with_max_freq() {
+        let query = "quickbrownfox";
+        let tokens = query.tokenize();
+
+        let (query_tree, _) = TestContext::default()
+            .build(TermsMatchingStrategy::All, true, None, tokens)
+            .unwrap()
+            .unwrap();
+
+        insta::assert_debug_snapshot!(query_tree, @r###"
+        OR
+          PHRASE [Some("quickbrown"), Some("fox")]
+          PrefixTolerant { word: "quickbrownfox", max typo: 2 }
         "###);
     }
 
@@ -1053,7 +1112,7 @@ mod test {
 
         insta::assert_debug_snapshot!(query_tree, @r###"
         AND
-          PHRASE ["hey", "friends"]
+          PHRASE [Some("hey"), Some("friends")]
           Exact { word: "wooop" }
         "###);
     }
@@ -1090,8 +1149,8 @@ mod test {
 
         insta::assert_debug_snapshot!(query_tree, @r###"
         AND
-          PHRASE ["hey", "friends"]
-          PHRASE ["wooop", "wooop"]
+          PHRASE [Some("hey"), Some("friends")]
+          PHRASE [Some("wooop"), Some("wooop")]
         "###);
     }
 
@@ -1139,7 +1198,7 @@ mod test {
             .unwrap();
 
         insta::assert_debug_snapshot!(query_tree, @r###"
-        PHRASE ["hey", "my"]
+        PHRASE [Some("hey"), Some("my")]
         "###);
     }
 
@@ -1204,7 +1263,7 @@ mod test {
 
         insta::assert_debug_snapshot!(query_tree, @r###"
         AND
-          PHRASE ["hey", "my"]
+          PHRASE [Some("hey"), Some("my")]
           Exact { word: "good" }
         "###);
     }

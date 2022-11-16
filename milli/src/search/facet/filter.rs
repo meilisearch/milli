@@ -5,15 +5,14 @@ use std::ops::Bound::{self, Excluded, Included};
 use either::Either;
 pub use filter_parser::{Condition, Error as FPError, FilterCondition, Span, Token};
 use heed::types::DecodeIgnore;
-use log::debug;
 use roaring::RoaringBitmap;
 
-use super::FacetNumberRange;
+use super::facet_range_search;
 use crate::error::{Error, UserError};
-use crate::heed_codec::facet::FacetLevelValueF64Codec;
-use crate::{
-    distance_between_two_points, lat_lng_to_xyz, CboRoaringBitmapCodec, FieldId, Index, Result,
+use crate::heed_codec::facet::{
+    FacetGroupKey, FacetGroupKeyCodec, FacetGroupValueCodec, OrderedF64Codec,
 };
+use crate::{distance_between_two_points, lat_lng_to_xyz, FieldId, Index, Result};
 
 /// The maximum number of filters the filter AST can process.
 const MAX_FILTER_DEPTH: usize = 2000;
@@ -96,19 +95,19 @@ impl<'a> Filter<'a> {
                 Either::Left(array) => {
                     let mut ors = vec![];
                     for rule in array {
-                        if let Some(filter) = Self::from_str(rule.as_ref())? {
+                        if let Some(filter) = Self::from_str(rule)? {
                             ors.push(filter.condition);
                         }
                     }
 
-                    if ors.len() > 1 {
-                        ands.push(FilterCondition::Or(ors));
-                    } else if ors.len() == 1 {
-                        ands.push(ors.pop().unwrap());
+                    match ors.len() {
+                        0 => (),
+                        1 => ands.push(ors.pop().unwrap()),
+                        _ => ands.push(FilterCondition::Or(ors)),
                     }
                 }
                 Either::Right(rule) => {
-                    if let Some(filter) = Self::from_str(rule.as_ref())? {
+                    if let Some(filter) = Self::from_str(rule)? {
                         ands.push(filter.condition);
                     }
                 }
@@ -129,6 +128,7 @@ impl<'a> Filter<'a> {
         Ok(Some(Self { condition: and }))
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(expression: &'a str) -> Result<Option<Self>> {
         let condition = match FilterCondition::parse(expression) {
             Ok(Some(fc)) => Ok(fc),
@@ -145,112 +145,14 @@ impl<'a> Filter<'a> {
 }
 
 impl<'a> Filter<'a> {
-    /// Aggregates the documents ids that are part of the specified range automatically
-    /// going deeper through the levels.
-    fn explore_facet_number_levels(
-        rtxn: &heed::RoTxn,
-        db: heed::Database<FacetLevelValueF64Codec, CboRoaringBitmapCodec>,
-        field_id: FieldId,
-        level: u8,
-        left: Bound<f64>,
-        right: Bound<f64>,
-        output: &mut RoaringBitmap,
-    ) -> Result<()> {
-        match (left, right) {
-            // If the request is an exact value we must go directly to the deepest level.
-            (Included(l), Included(r)) if l == r && level > 0 => {
-                return Self::explore_facet_number_levels(
-                    rtxn, db, field_id, 0, left, right, output,
-                );
-            }
-            // lower TO upper when lower > upper must return no result
-            (Included(l), Included(r)) if l > r => return Ok(()),
-            (Included(l), Excluded(r)) if l >= r => return Ok(()),
-            (Excluded(l), Excluded(r)) if l >= r => return Ok(()),
-            (Excluded(l), Included(r)) if l >= r => return Ok(()),
-            (_, _) => (),
-        }
+    pub fn evaluate(&self, rtxn: &heed::RoTxn, index: &Index) -> Result<RoaringBitmap> {
+        // to avoid doing this for each recursive call we're going to do it ONCE ahead of time
+        let soft_deleted_documents = index.soft_deleted_documents_ids(rtxn)?;
+        let filterable_fields = index.filterable_fields(rtxn)?;
 
-        let mut left_found = None;
-        let mut right_found = None;
-
-        // We must create a custom iterator to be able to iterate over the
-        // requested range as the range iterator cannot express some conditions.
-        let iter = FacetNumberRange::new(rtxn, db, field_id, level, left, right)?;
-
-        debug!("Iterating between {:?} and {:?} (level {})", left, right, level);
-
-        for (i, result) in iter.enumerate() {
-            let ((_fid, level, l, r), docids) = result?;
-            debug!("{:?} to {:?} (level {}) found {} documents", l, r, level, docids.len());
-            *output |= docids;
-            // We save the leftest and rightest bounds we actually found at this level.
-            if i == 0 {
-                left_found = Some(l);
-            }
-            right_found = Some(r);
-        }
-
-        // Can we go deeper?
-        let deeper_level = match level.checked_sub(1) {
-            Some(level) => level,
-            None => return Ok(()),
-        };
-
-        // We must refine the left and right bounds of this range by retrieving the
-        // missing part in a deeper level.
-        match left_found.zip(right_found) {
-            Some((left_found, right_found)) => {
-                // If the bound is satisfied we avoid calling this function again.
-                if !matches!(left, Included(l) if l == left_found) {
-                    let sub_right = Excluded(left_found);
-                    debug!(
-                        "calling left with {:?} to {:?} (level {})",
-                        left, sub_right, deeper_level
-                    );
-                    Self::explore_facet_number_levels(
-                        rtxn,
-                        db,
-                        field_id,
-                        deeper_level,
-                        left,
-                        sub_right,
-                        output,
-                    )?;
-                }
-                if !matches!(right, Included(r) if r == right_found) {
-                    let sub_left = Excluded(right_found);
-                    debug!(
-                        "calling right with {:?} to {:?} (level {})",
-                        sub_left, right, deeper_level
-                    );
-                    Self::explore_facet_number_levels(
-                        rtxn,
-                        db,
-                        field_id,
-                        deeper_level,
-                        sub_left,
-                        right,
-                        output,
-                    )?;
-                }
-            }
-            None => {
-                // If we found nothing at this level it means that we must find
-                // the same bounds but at a deeper, more precise level.
-                Self::explore_facet_number_levels(
-                    rtxn,
-                    db,
-                    field_id,
-                    deeper_level,
-                    left,
-                    right,
-                    output,
-                )?;
-            }
-        }
-
-        Ok(())
+        // and finally we delete all the soft_deleted_documents, again, only once at the very end
+        self.inner_evaluate(rtxn, index, &filterable_fields)
+            .map(|result| result - soft_deleted_documents)
     }
 
     fn evaluate_operator(
@@ -267,20 +169,36 @@ impl<'a> Filter<'a> {
         // field id and the level.
 
         let (left, right) = match operator {
-            Condition::GreaterThan(val) => (Excluded(val.parse()?), Included(f64::MAX)),
-            Condition::GreaterThanOrEqual(val) => (Included(val.parse()?), Included(f64::MAX)),
-            Condition::LowerThan(val) => (Included(f64::MIN), Excluded(val.parse()?)),
-            Condition::LowerThanOrEqual(val) => (Included(f64::MIN), Included(val.parse()?)),
-            Condition::Between { from, to } => (Included(from.parse()?), Included(to.parse()?)),
+            Condition::GreaterThan(val) => {
+                (Excluded(val.parse_finite_float()?), Included(f64::MAX))
+            }
+            Condition::GreaterThanOrEqual(val) => {
+                (Included(val.parse_finite_float()?), Included(f64::MAX))
+            }
+            Condition::LowerThan(val) => (Included(f64::MIN), Excluded(val.parse_finite_float()?)),
+            Condition::LowerThanOrEqual(val) => {
+                (Included(f64::MIN), Included(val.parse_finite_float()?))
+            }
+            Condition::Between { from, to } => {
+                (Included(from.parse_finite_float()?), Included(to.parse_finite_float()?))
+            }
             Condition::Exists => {
                 let exist = index.exists_faceted_documents_ids(rtxn, field_id)?;
                 return Ok(exist);
             }
             Condition::Equal(val) => {
-                let (_original_value, string_docids) = strings_db
-                    .get(rtxn, &(field_id, &val.value().to_lowercase()))?
+                let string_docids = strings_db
+                    .get(
+                        rtxn,
+                        &FacetGroupKey {
+                            field_id,
+                            level: 0,
+                            left_bound: &val.value().to_lowercase(),
+                        },
+                    )?
+                    .map(|v| v.bitmap)
                     .unwrap_or_default();
-                let number = val.parse::<f64>().ok();
+                let number = val.parse_finite_float().ok();
                 let number_docids = match number {
                     Some(n) => {
                         let n = Included(n);
@@ -312,8 +230,19 @@ impl<'a> Filter<'a> {
         // that's fine if it don't, the value just before will be returned instead.
         let biggest_level = numbers_db
             .remap_data_type::<DecodeIgnore>()
-            .get_lower_than_or_equal_to(rtxn, &(field_id, u8::MAX, f64::MAX, f64::MAX))?
-            .and_then(|((id, level, _, _), _)| if id == field_id { Some(level) } else { None });
+            .get_lower_than_or_equal_to(
+                rtxn,
+                &FacetGroupKey { field_id, level: u8::MAX, left_bound: f64::MAX },
+            )?
+            .and_then(
+                |(FacetGroupKey { field_id: id, level, .. }, _)| {
+                    if id == field_id {
+                        Some(level)
+                    } else {
+                        None
+                    }
+                },
+            );
 
         match biggest_level {
             Some(level) => {
@@ -333,14 +262,36 @@ impl<'a> Filter<'a> {
         }
     }
 
-    pub fn evaluate(&self, rtxn: &heed::RoTxn, index: &Index) -> Result<RoaringBitmap> {
-        // to avoid doing this for each recursive call we're going to do it ONCE ahead of time
-        let soft_deleted_documents = index.soft_deleted_documents_ids(rtxn)?;
-        let filterable_fields = index.filterable_fields(rtxn)?;
+    /// Aggregates the documents ids that are part of the specified range automatically
+    /// going deeper through the levels.
+    fn explore_facet_number_levels(
+        rtxn: &heed::RoTxn,
+        db: heed::Database<FacetGroupKeyCodec<OrderedF64Codec>, FacetGroupValueCodec>,
+        field_id: FieldId,
+        level: u8,
+        left: Bound<f64>,
+        right: Bound<f64>,
+        output: &mut RoaringBitmap,
+    ) -> Result<()> {
+        match (left, right) {
+            // If the request is an exact value we must go directly to the deepest level.
+            (Included(l), Included(r)) if l == r && level > 0 => {
+                return Self::explore_facet_number_levels(
+                    rtxn, db, field_id, 0, left, right, output,
+                );
+            }
+            // lower TO upper when lower > upper must return no result
+            (Included(l), Included(r)) if l > r => return Ok(()),
+            (Included(l), Excluded(r)) if l >= r => return Ok(()),
+            (Excluded(l), Excluded(r)) if l >= r => return Ok(()),
+            (Excluded(l), Included(r)) if l >= r => return Ok(()),
+            (_, _) => (),
+        }
+        facet_range_search::find_docids_of_facet_within_bounds::<OrderedF64Codec>(
+            rtxn, db, field_id, &left, &right, output,
+        )?;
 
-        // and finally we delete all the soft_deleted_documents, again, only once at the very end
-        self.inner_evaluate(rtxn, index, &filterable_fields)
-            .map(|result| result - soft_deleted_documents)
+        Ok(())
     }
 
     fn inner_evaluate(
@@ -358,7 +309,7 @@ impl<'a> Filter<'a> {
                     index,
                     filterable_fields,
                 )?;
-                return Ok(all_ids - selected);
+                Ok(all_ids - selected)
             }
             FilterCondition::In { fid, els } => {
                 if crate::is_faceted(fid.value(), filterable_fields) {
@@ -377,38 +328,36 @@ impl<'a> Filter<'a> {
                         Ok(RoaringBitmap::new())
                     }
                 } else {
-                    return Err(fid.as_external_error(FilterError::AttributeNotFilterable {
+                    Err(fid.as_external_error(FilterError::AttributeNotFilterable {
                         attribute: fid.value(),
                         filterable_fields: filterable_fields.clone(),
-                    }))?;
+                    }))?
                 }
             }
             FilterCondition::Condition { fid, op } => {
                 if crate::is_faceted(fid.value(), filterable_fields) {
                     let field_ids_map = index.fields_ids_map(rtxn)?;
                     if let Some(fid) = field_ids_map.id(fid.value()) {
-                        Self::evaluate_operator(rtxn, index, fid, &op)
+                        Self::evaluate_operator(rtxn, index, fid, op)
                     } else {
-                        return Ok(RoaringBitmap::new());
+                        Ok(RoaringBitmap::new())
                     }
                 } else {
                     match fid.lexeme() {
                         attribute @ "_geo" => {
-                            return Err(fid.as_external_error(FilterError::BadGeo(attribute)))?;
+                            Err(fid.as_external_error(FilterError::BadGeo(attribute)))?
                         }
                         attribute if attribute.starts_with("_geoPoint(") => {
-                            return Err(fid.as_external_error(FilterError::BadGeo("_geoPoint")))?;
+                            Err(fid.as_external_error(FilterError::BadGeo("_geoPoint")))?
                         }
                         attribute @ "_geoDistance" => {
-                            return Err(fid.as_external_error(FilterError::Reserved(attribute)))?;
+                            Err(fid.as_external_error(FilterError::Reserved(attribute)))?
                         }
                         attribute => {
-                            return Err(fid.as_external_error(
-                                FilterError::AttributeNotFilterable {
-                                    attribute,
-                                    filterable_fields: filterable_fields.clone(),
-                                },
-                            ))?;
+                            Err(fid.as_external_error(FilterError::AttributeNotFilterable {
+                                attribute,
+                                filterable_fields: filterable_fields.clone(),
+                            }))?
                         }
                     }
                 }
@@ -448,7 +397,8 @@ impl<'a> Filter<'a> {
             }
             FilterCondition::GeoLowerThan { point, radius } => {
                 if filterable_fields.contains("_geo") {
-                    let base_point: [f64; 2] = [point[0].parse()?, point[1].parse()?];
+                    let base_point: [f64; 2] =
+                        [point[0].parse_finite_float()?, point[1].parse_finite_float()?];
                     if !(-90.0..=90.0).contains(&base_point[0]) {
                         return Err(
                             point[0].as_external_error(FilterError::BadGeoLat(base_point[0]))
@@ -459,7 +409,7 @@ impl<'a> Filter<'a> {
                             point[1].as_external_error(FilterError::BadGeoLng(base_point[1]))
                         )?;
                     }
-                    let radius = radius.parse()?;
+                    let radius = radius.parse_finite_float()?;
                     let rtree = match index.geo_rtree(rtxn)? {
                         Some(rtree) => rtree,
                         None => return Ok(RoaringBitmap::new()),
@@ -477,10 +427,10 @@ impl<'a> Filter<'a> {
 
                     Ok(result)
                 } else {
-                    return Err(point[0].as_external_error(FilterError::AttributeNotFilterable {
+                    Err(point[0].as_external_error(FilterError::AttributeNotFilterable {
                         attribute: "_geo",
                         filterable_fields: filterable_fields.clone(),
-                    }))?;
+                    }))?
                 }
             }
         }
@@ -747,5 +697,61 @@ mod tests {
     fn empty_filter() {
         let option = Filter::from_str("     ").unwrap();
         assert_eq!(option, None);
+    }
+
+    #[test]
+    fn non_finite_float() {
+        let index = TempIndex::new();
+
+        index
+            .update_settings(|settings| {
+                settings.set_searchable_fields(vec![S("price")]); // to keep the fields order
+                settings.set_filterable_fields(hashset! { S("price") });
+            })
+            .unwrap();
+        index
+            .add_documents(documents!([
+                {
+                    "id": "test_1",
+                    "price": "inf"
+                },
+                {
+                    "id": "test_2",
+                    "price": "2000"
+                },
+                {
+                    "id": "test_3",
+                    "price": "infinity"
+                },
+            ]))
+            .unwrap();
+
+        let rtxn = index.read_txn().unwrap();
+        let filter = Filter::from_str("price = inf").unwrap().unwrap();
+        let result = filter.evaluate(&rtxn, &index).unwrap();
+        assert!(result.contains(0));
+        let filter = Filter::from_str("price < inf").unwrap().unwrap();
+        assert!(matches!(
+            filter.evaluate(&rtxn, &index),
+            Err(crate::Error::UserError(crate::error::UserError::InvalidFilter(_)))
+        ));
+
+        let filter = Filter::from_str("price = NaN").unwrap().unwrap();
+        let result = filter.evaluate(&rtxn, &index).unwrap();
+        assert!(result.is_empty());
+        let filter = Filter::from_str("price < NaN").unwrap().unwrap();
+        assert!(matches!(
+            filter.evaluate(&rtxn, &index),
+            Err(crate::Error::UserError(crate::error::UserError::InvalidFilter(_)))
+        ));
+
+        let filter = Filter::from_str("price = infinity").unwrap().unwrap();
+        let result = filter.evaluate(&rtxn, &index).unwrap();
+        assert!(result.contains(2));
+        let filter = Filter::from_str("price < infinity").unwrap().unwrap();
+        assert!(matches!(
+            filter.evaluate(&rtxn, &index),
+            Err(crate::Error::UserError(crate::error::UserError::InvalidFilter(_)))
+        ));
     }
 }

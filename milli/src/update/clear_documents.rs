@@ -1,6 +1,7 @@
 use roaring::RoaringBitmap;
 use time::OffsetDateTime;
 
+use crate::facet::FacetType;
 use crate::{ExternalDocumentsIds, FieldDistribution, Index, Result};
 
 pub struct ClearDocuments<'t, 'u, 'i> {
@@ -25,6 +26,7 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
             docid_word_positions,
             word_pair_proximity_docids,
             word_prefix_pair_proximity_docids,
+            prefix_word_pair_proximity_docids,
             word_position_docids,
             field_id_word_count_docids,
             word_prefix_position_docids,
@@ -54,8 +56,18 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
 
         // We clean all the faceted documents ids.
         for field_id in faceted_fields {
-            self.index.put_number_faceted_documents_ids(self.wtxn, field_id, &empty_roaring)?;
-            self.index.put_string_faceted_documents_ids(self.wtxn, field_id, &empty_roaring)?;
+            self.index.put_faceted_documents_ids(
+                self.wtxn,
+                field_id,
+                FacetType::Number,
+                &empty_roaring,
+            )?;
+            self.index.put_faceted_documents_ids(
+                self.wtxn,
+                field_id,
+                FacetType::String,
+                &empty_roaring,
+            )?;
         }
 
         // Clear the other databases.
@@ -66,6 +78,7 @@ impl<'t, 'u, 'i> ClearDocuments<'t, 'u, 'i> {
         docid_word_positions.clear(self.wtxn)?;
         word_pair_proximity_docids.clear(self.wtxn)?;
         word_prefix_pair_proximity_docids.clear(self.wtxn)?;
+        prefix_word_pair_proximity_docids.clear(self.wtxn)?;
         word_position_docids.clear(self.wtxn)?;
         field_id_word_count_docids.clear(self.wtxn)?;
         word_prefix_position_docids.clear(self.wtxn)?;
