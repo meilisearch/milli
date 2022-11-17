@@ -44,9 +44,9 @@ impl<'a> ExternalDocumentsIds<'a> {
 
     pub fn delete_ids<A: AsRef<[u8]>>(&mut self, other: fst::Set<A>) -> fst::Result<()> {
         let other = fst::Map::from(other.into_fst());
-        let union_op = self.docids.op().add(&other).r#union();
+        let difference_op = self.docids.op().add(&other).r#difference();
 
-        let mut iter = union_op.into_stream();
+        let mut iter = difference_op.into_stream();
         let mut new_docids_builder = fst::MapBuilder::memory();
         while let Some((external_id, docids)) = iter.next() {
             let value = docids.iter().find(|v| v.index == 0).unwrap().value;
