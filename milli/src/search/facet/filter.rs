@@ -436,9 +436,9 @@ impl<'a> Filter<'a> {
             FilterCondition::GeoBoundingBox { top_left_point, bottom_right_point } => {
                 if filterable_fields.contains("_geo") {
                     let top_left: [f64; 2] =
-                        [top_left_point[0].parse()?, top_left_point[1].parse()?];
+                        [top_left_point[0].parse_finite_float()?, top_left_point[1].parse_finite_float()?];
                     let bottom_right: [f64; 2] =
-                        [bottom_right_point[0].parse()?, bottom_right_point[1].parse()?];
+                        [bottom_right_point[0].parse_finite_float()?, bottom_right_point[1].parse_finite_float()?];
                     if !(-90.0..=90.0).contains(&top_left[0]) {
                         return Err(top_left_point[0]
                             .as_external_error(FilterError::BadGeoLat(top_left[0])))?;
