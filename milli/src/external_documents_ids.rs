@@ -49,6 +49,7 @@ impl<'a> ExternalDocumentsIds<'a> {
         let mut iter = difference_op.into_stream();
         let mut new_docids_builder = fst::MapBuilder::memory();
         while let Some((external_id, docids)) = iter.next() {
+            // take value that was set in the streams first - index == 0
             let value = docids.iter().find(|v| v.index == 0).unwrap().value;
             new_docids_builder.insert(external_id, value)?;
         }
