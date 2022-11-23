@@ -12,7 +12,7 @@ use crate::heed_codec::facet::{
     FacetGroupKey, FacetGroupKeyCodec, FacetGroupValue, FacetGroupValueCodec,
 };
 use crate::heed_codec::ByteSliceRefCodec;
-use crate::update::index_documents::{create_writer, writer_into_reader};
+use crate::update::index_documents::{create_writer, valid_lmdb_key, writer_into_reader};
 use crate::{CboRoaringBitmapCodec, FieldId, Index, Result};
 
 /// Algorithm to insert elememts into the `facet_id_(string/f64)_docids` databases
@@ -111,7 +111,7 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
         }
 
         for &field_id in field_ids.iter() {
-            let (level_readers, all_docids) = self.compute_levels_for_field_id(field_id, &wtxn)?;
+            let (level_readers, all_docids) = self.compute_levels_for_field_id(field_id, wtxn)?;
 
             handle_all_docids(wtxn, field_id, all_docids)?;
 
@@ -142,6 +142,9 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
             let mut database = self.db.iter_mut(wtxn)?.remap_types::<ByteSlice, ByteSlice>();
             let mut cursor = new_data.into_cursor()?;
             while let Some((key, value)) = cursor.move_on_next()? {
+                if !valid_lmdb_key(key) {
+                    continue;
+                }
                 buffer.clear();
                 // the group size for level 0
                 buffer.push(1);
@@ -155,6 +158,9 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
 
             let mut cursor = new_data.into_cursor()?;
             while let Some((key, value)) = cursor.move_on_next()? {
+                if !valid_lmdb_key(key) {
+                    continue;
+                }
                 // the value is a CboRoaringBitmap, but I still need to prepend the
                 // group size for level 0 (= 1) to it
                 buffer.clear();
@@ -192,6 +198,7 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
 
         Ok((subwriters, all_docids))
     }
+    #[allow(clippy::type_complexity)]
     fn read_level_0<'t>(
         &self,
         rtxn: &'t RoTxn,
@@ -245,6 +252,7 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
     /// ## Returns:
     /// A vector of grenad::Reader. The reader at index `i` corresponds to the elements of level `i + 1`
     /// that must be inserted into the database.
+    #[allow(clippy::type_complexity)]
     fn compute_higher_levels<'t>(
         &self,
         rtxn: &'t RoTxn,
@@ -341,7 +349,7 @@ impl<R: std::io::Read + std::io::Seek> FacetsUpdateBulkInner<R> {
                 handle_group(&bitmaps, left_bounds.first().unwrap())?;
             }
         }
-        return Ok(sub_writers);
+        Ok(sub_writers)
     }
 }
 

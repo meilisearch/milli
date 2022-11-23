@@ -44,7 +44,7 @@ word2    : doggo
 2. **Inner loop:** Then, we iterate over all the prefixes of `word2` that are
 in the list of sorted prefixes. And we insert the key `prefix`
 and the value (`docids`) to a sorted map which we call the “batch”. For example,
-at the end of the first inner loop, we may have:
+at the end of the first outer loop, we may have:
 ```text
 Outer loop 1:
 ------------------------------
@@ -85,7 +85,7 @@ end of the batch.
 
 4. On the third iteration of the outer loop, we have:
 ```text
-Outer loop 4:
+Outer loop 3:
 ------------------------------
 proximity: 1
 word1    : good
@@ -176,6 +176,7 @@ use crate::update::prefix_word_pairs::{
 };
 use crate::{CboRoaringBitmapCodec, Result, U8StrStrCodec, UncheckedU8StrStrCodec};
 
+#[allow(clippy::too_many_arguments)]
 #[logging_timer::time]
 pub fn index_word_prefix_database(
     wtxn: &mut heed::RwTxn,
@@ -339,17 +340,16 @@ fn execute_on_word_pairs_and_prefixes<I>(
         if prox_different_than_prev || word1_different_than_prev || word2_start_different_than_prev
         {
             batch.flush(&mut merge_buffer, &mut insert)?;
+            batch.proximity = proximity;
             // don't forget to reset the value of batch.word1 and prev_word2_start
             if word1_different_than_prev {
-                prefix_search_start.0 = 0;
                 batch.word1.clear();
                 batch.word1.extend_from_slice(word1);
-                batch.proximity = proximity;
             }
             if word2_start_different_than_prev {
-                // word2_start_different_than_prev == true
                 prev_word2_start = word2[0];
             }
+            prefix_search_start.0 = 0;
             // Optimisation: find the search start in the prefix trie to iterate over the prefixes of word2
             empty_prefixes = !prefixes.set_search_start(word2, &mut prefix_search_start);
         }
@@ -385,6 +385,7 @@ can be inserted into the database in sorted order. When it is flushed, it calls 
 struct PrefixAndProximityBatch {
     proximity: u8,
     word1: Vec<u8>,
+    #[allow(clippy::type_complexity)]
     batch: Vec<(Vec<u8>, Vec<Cow<'static, [u8]>>)>,
 }
 
@@ -574,7 +575,7 @@ mod tests {
         expected_prefixes: &[&str],
     ) {
         let mut actual_prefixes = vec![];
-        trie.for_each_prefix_of(word.as_bytes(), &mut Vec::new(), &search_start, |x| {
+        trie.for_each_prefix_of(word.as_bytes(), &mut Vec::new(), search_start, |x| {
             let s = String::from_utf8(x.to_owned()).unwrap();
             actual_prefixes.push(s);
         });

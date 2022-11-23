@@ -598,6 +598,7 @@ where
 }
 
 /// Run the word prefix docids update operation.
+#[allow(clippy::too_many_arguments)]
 fn execute_word_prefix_docids(
     txn: &mut heed::RwTxn,
     reader: grenad::Reader<Cursor<ClonableMmap>>,
@@ -772,7 +773,7 @@ mod tests {
 
         let docs = index.documents(&rtxn, vec![0, 1, 2]).unwrap();
         let (_id, obkv) = docs.iter().find(|(_id, kv)| kv.get(0) == Some(br#""kevin""#)).unwrap();
-        let kevin_uuid: String = serde_json::from_slice(&obkv.get(1).unwrap()).unwrap();
+        let kevin_uuid: String = serde_json::from_slice(obkv.get(1).unwrap()).unwrap();
         drop(rtxn);
 
         // Second we send 1 document with the generated uuid, to erase the previous ones.
@@ -1811,7 +1812,7 @@ mod tests {
         let long_word = "lol".repeat(1000);
         let doc1 = documents! {[{
             "id": "1",
-            "title": long_word.clone(),
+            "title": long_word,
         }]};
 
         index.add_documents(doc1).unwrap();
@@ -1819,5 +1820,25 @@ mod tests {
         let rtxn = index.read_txn().unwrap();
         let words_fst = index.words_fst(&rtxn).unwrap();
         assert!(!words_fst.contains(&long_word));
+    }
+
+    #[test]
+    fn long_facet_values_must_not_crash() {
+        let index = TempIndex::new();
+
+        // this is obviousy too long
+        let long_word = "lol".repeat(1000);
+        let doc1 = documents! {[{
+            "id": "1",
+            "title": long_word,
+        }]};
+
+        index
+            .update_settings(|settings| {
+                settings.set_filterable_fields(hashset! { S("title") });
+            })
+            .unwrap();
+
+        index.add_documents(doc1).unwrap();
     }
 }
