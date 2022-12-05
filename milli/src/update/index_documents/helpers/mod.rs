@@ -18,8 +18,7 @@ pub use merge_functions::{
     serialize_roaring_bitmap, MergeFn,
 };
 
-/// The maximum length a word can be
-pub const MAX_WORD_LENGTH: usize = 250;
+use crate::MAX_WORD_LENGTH;
 
 pub fn valid_lmdb_key(key: impl AsRef<[u8]>) -> bool {
     key.as_ref().len() <= MAX_WORD_LENGTH * 2 && !key.as_ref().is_empty()
