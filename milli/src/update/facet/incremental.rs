@@ -436,6 +436,8 @@ impl FacetsUpdateIncrementalInner {
                 level: highest_level + 1,
                 left_bound: first_key.unwrap().left_bound,
             };
+            // Note: nbr_leftover_elements can be casted to a u8 since it is bounded by `max_group_size`
+            // when it is created above.
             let value = FacetGroupValue { size: nbr_leftover_elements as u8, bitmap: values };
             to_add.push((key.into_owned(), value));
         }
@@ -646,7 +648,7 @@ mod tests {
     use crate::heed_codec::facet::OrderedF64Codec;
     use crate::heed_codec::StrRefCodec;
     use crate::milli_snap;
-    use crate::update::facet::tests::FacetIndex;
+    use crate::update::facet::test_helpers::FacetIndex;
 
     #[test]
     fn append() {
@@ -1051,7 +1053,7 @@ mod fuzz {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::update::facet::tests::FacetIndex;
+    use crate::update::facet::test_helpers::FacetIndex;
     #[derive(Default)]
     pub struct TrivialDatabase<T> {
         pub elements: BTreeMap<u16, BTreeMap<T, RoaringBitmap>>,

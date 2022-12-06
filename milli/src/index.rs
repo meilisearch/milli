@@ -1185,13 +1185,17 @@ pub(crate) mod tests {
 
     use big_s::S;
     use heed::{EnvOpenOptions, RwTxn};
+    use maplit::hashset;
     use tempfile::TempDir;
 
     use crate::documents::DocumentsBatchReader;
     use crate::error::{Error, InternalError};
     use crate::index::{DEFAULT_MIN_WORD_LEN_ONE_TYPO, DEFAULT_MIN_WORD_LEN_TWO_TYPOS};
-    use crate::update::{self, IndexDocuments, IndexDocumentsConfig, IndexerConfig, Settings};
-    use crate::{db_snap, Index};
+    use crate::update::{
+        self, DeleteDocuments, IndexDocuments, IndexDocumentsConfig, IndexDocumentsMethod,
+        IndexerConfig, Settings,
+    };
+    use crate::{db_snap, obkv_to_json, Index};
 
     pub(crate) struct TempIndex {
         pub inner: Index,
@@ -1476,5 +1480,635 @@ pub(crate) mod tests {
 
         let user_defined = index.user_defined_searchable_fields(&rtxn).unwrap().unwrap();
         assert_eq!(user_defined, &["doggo", "name"]);
+    }
+
+    #[test]
+    fn replace_documents_external_ids_and_soft_deletion_check() {
+        use big_s::S;
+        use maplit::hashset;
+
+        let index = TempIndex::new();
+
+        index
+            .update_settings(|settings| {
+                settings.set_primary_key("id".to_owned());
+                settings.set_filterable_fields(hashset! { S("doggo") });
+            })
+            .unwrap();
+
+        let mut docs = vec![];
+        for i in 0..4 {
+            docs.push(serde_json::json!(
+                { "id": i, "doggo": i }
+            ));
+        }
+        index.add_documents(documents!(docs)).unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, 2, 3, ]");
+        db_snap!(index, external_documents_ids, 1, @r###"
+        soft:
+        hard:
+        0                        0
+        1                        1
+        2                        2
+        3                        3
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 1, @"[]");
+        db_snap!(index, facet_id_f64_docids, 1, @r###"
+        1   0  0      1  [0, ]
+        1   0  1      1  [1, ]
+        1   0  2      1  [2, ]
+        1   0  3      1  [3, ]
+        "###);
+
+        let mut docs = vec![];
+        for i in 0..3 {
+            docs.push(serde_json::json!(
+                { "id": i, "doggo": i + 1 }
+            ));
+        }
+        index.add_documents(documents!(docs)).unwrap();
+
+        db_snap!(index, documents_ids, @"[3, 4, 5, 6, ]");
+        db_snap!(index, external_documents_ids, 2, @r###"
+        soft:
+        hard:
+        0                        4
+        1                        5
+        2                        6
+        3                        3
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 2, @"[0, 1, 2, ]");
+        db_snap!(index, facet_id_f64_docids, 2, @r###"
+        1   0  0      1  [0, ]
+        1   0  1      1  [1, 4, ]
+        1   0  2      1  [2, 5, ]
+        1   0  3      1  [3, 6, ]
+        "###);
+
+        index
+            .add_documents(documents!([{ "id": 3, "doggo": 4 }, { "id": 3, "doggo": 5 },{ "id": 3, "doggo": 4 }]))
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[4, 5, 6, 7, ]");
+        db_snap!(index, external_documents_ids, 3, @r###"
+        soft:
+        3                        7
+        hard:
+        0                        4
+        1                        5
+        2                        6
+        3                        3
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 3, @"[0, 1, 2, 3, ]");
+        db_snap!(index, facet_id_f64_docids, 3, @r###"
+        1   0  0      1  [0, ]
+        1   0  1      1  [1, 4, ]
+        1   0  2      1  [2, 5, ]
+        1   0  3      1  [3, 6, ]
+        1   0  4      1  [7, ]
+        "###);
+
+        index
+            .update_settings(|settings| {
+                settings.set_distinct_field("id".to_owned());
+            })
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[4, 5, 6, 7, ]");
+        db_snap!(index, external_documents_ids, 3, @r###"
+        soft:
+        hard:
+        0                        4
+        1                        5
+        2                        6
+        3                        7
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 3, @"[]");
+        db_snap!(index, facet_id_f64_docids, 3, @r###"
+        0   0  0      1  [4, ]
+        0   0  1      1  [5, ]
+        0   0  2      1  [6, ]
+        0   0  3      1  [7, ]
+        1   0  1      1  [4, ]
+        1   0  2      1  [5, ]
+        1   0  3      1  [6, ]
+        1   0  4      1  [7, ]
+        "###);
+    }
+
+    #[test]
+    fn replace_documents_in_batches_external_ids_and_soft_deletion_check() {
+        use big_s::S;
+        use maplit::hashset;
+
+        let mut index = TempIndex::new();
+
+        index
+            .update_settings(|settings| {
+                settings.set_primary_key("id".to_owned());
+                settings.set_filterable_fields(hashset! { S("doggo") });
+            })
+            .unwrap();
+
+        let add_documents = |index: &TempIndex, docs: Vec<Vec<serde_json::Value>>| {
+            let mut wtxn = index.write_txn().unwrap();
+            let mut builder = IndexDocuments::new(
+                &mut wtxn,
+                index,
+                &index.indexer_config,
+                index.index_documents_config.clone(),
+                |_| (),
+                || false,
+            )
+            .unwrap();
+            for docs in docs {
+                (builder, _) = builder.add_documents(documents!(docs)).unwrap();
+            }
+            builder.execute().unwrap();
+            wtxn.commit().unwrap();
+        };
+        // First Batch
+        {
+            let mut docs1 = vec![];
+            for i in 0..4 {
+                docs1.push(serde_json::json!(
+                    { "id": i, "doggo": i }
+                ));
+            }
+            add_documents(&index, vec![docs1]);
+
+            db_snap!(index, documents_ids, @"[0, 1, 2, 3, ]");
+            db_snap!(index, external_documents_ids, 1, @r###"
+            soft:
+            hard:
+            0                        0
+            1                        1
+            2                        2
+            3                        3
+            "###);
+            db_snap!(index, soft_deleted_documents_ids, 1, @"[]");
+            db_snap!(index, facet_id_f64_docids, 1, @r###"
+            1   0  0      1  [0, ]
+            1   0  1      1  [1, ]
+            1   0  2      1  [2, ]
+            1   0  3      1  [3, ]
+            "###);
+        }
+        // Second Batch: replace the documents with soft-deletion
+        {
+            index.index_documents_config.disable_soft_deletion = false;
+            let mut docs1 = vec![];
+            for i in 0..3 {
+                docs1.push(serde_json::json!(
+                    { "id": i, "doggo": i+1 }
+                ));
+            }
+            let mut docs2 = vec![];
+            for i in 0..3 {
+                docs2.push(serde_json::json!(
+                    { "id": i, "doggo": i }
+                ));
+            }
+            add_documents(&index, vec![docs1, docs2]);
+
+            db_snap!(index, documents_ids, @"[3, 4, 5, 6, ]");
+            db_snap!(index, external_documents_ids, 1, @r###"
+            soft:
+            hard:
+            0                        4
+            1                        5
+            2                        6
+            3                        3
+            "###);
+            db_snap!(index, soft_deleted_documents_ids, 1, @"[0, 1, 2, ]");
+            db_snap!(index, facet_id_f64_docids, 1, @r###"
+            1   0  0      1  [0, 4, ]
+            1   0  1      1  [1, 5, ]
+            1   0  2      1  [2, 6, ]
+            1   0  3      1  [3, ]
+            "###);
+        }
+        let rtxn = index.read_txn().unwrap();
+        let (_docid, obkv) = index.documents(&rtxn, [3]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(3),
+            "doggo": Number(3),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [4]).unwrap()[0];
+
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(0),
+            "doggo": Number(0),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [5]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(1),
+            "doggo": Number(1),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [6]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(2),
+            "doggo": Number(2),
+        }
+        "###);
+        drop(rtxn);
+        // Third Batch: replace the documents with soft-deletion again
+        {
+            index.index_documents_config.disable_soft_deletion = false;
+            let mut docs1 = vec![];
+            for i in 0..3 {
+                docs1.push(serde_json::json!(
+                    { "id": i, "doggo": i+1 }
+                ));
+            }
+            let mut docs2 = vec![];
+            for i in 0..4 {
+                docs2.push(serde_json::json!(
+                    { "id": i, "doggo": i }
+                ));
+            }
+            add_documents(&index, vec![docs1, docs2]);
+
+            db_snap!(index, documents_ids, @"[3, 7, 8, 9, ]");
+            db_snap!(index, external_documents_ids, 1, @r###"
+            soft:
+            hard:
+            0                        7
+            1                        8
+            2                        9
+            3                        3
+            "###);
+            db_snap!(index, soft_deleted_documents_ids, 1, @"[0, 1, 2, 4, 5, 6, ]");
+            db_snap!(index, facet_id_f64_docids, 1, @r###"
+            1   0  0      1  [0, 4, 7, ]
+            1   0  1      1  [1, 5, 8, ]
+            1   0  2      1  [2, 6, 9, ]
+            1   0  3      1  [3, ]
+            "###);
+        }
+        let rtxn = index.read_txn().unwrap();
+        let (_docid, obkv) = index.documents(&rtxn, [3]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(3),
+            "doggo": Number(3),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [7]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(0),
+            "doggo": Number(0),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [8]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(1),
+            "doggo": Number(1),
+        }
+        "###);
+        let (_docid, obkv) = index.documents(&rtxn, [9]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "id": Number(2),
+            "doggo": Number(2),
+        }
+        "###);
+        drop(rtxn);
+
+        // Fourth Batch: replace the documents without soft-deletion
+        {
+            index.index_documents_config.disable_soft_deletion = true;
+            let mut docs1 = vec![];
+            for i in 0..3 {
+                docs1.push(serde_json::json!(
+                    { "id": i, "doggo": i+2 }
+                ));
+            }
+            let mut docs2 = vec![];
+            for i in 0..1 {
+                docs2.push(serde_json::json!(
+                    { "id": i, "doggo": i }
+                ));
+            }
+            add_documents(&index, vec![docs1, docs2]);
+
+            db_snap!(index, documents_ids, @"[3, 10, 11, 12, ]");
+            db_snap!(index, external_documents_ids, 1, @r###"
+            soft:
+            hard:
+            0                        10
+            1                        11
+            2                        12
+            3                        3
+            "###);
+            db_snap!(index, soft_deleted_documents_ids, 1, @"[]");
+            db_snap!(index, facet_id_f64_docids, 1, @r###"
+            1   0  0      1  [10, ]
+            1   0  3      1  [3, 11, ]
+            1   0  4      1  [12, ]
+            "###);
+
+            let rtxn = index.read_txn().unwrap();
+            let (_docid, obkv) = index.documents(&rtxn, [3]).unwrap()[0];
+            let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+            insta::assert_debug_snapshot!(json, @r###"
+            {
+                "id": Number(3),
+                "doggo": Number(3),
+            }
+            "###);
+            let (_docid, obkv) = index.documents(&rtxn, [10]).unwrap()[0];
+            let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+            insta::assert_debug_snapshot!(json, @r###"
+            {
+                "id": Number(0),
+                "doggo": Number(0),
+            }
+            "###);
+            let (_docid, obkv) = index.documents(&rtxn, [11]).unwrap()[0];
+            let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+            insta::assert_debug_snapshot!(json, @r###"
+            {
+                "id": Number(1),
+                "doggo": Number(3),
+            }
+            "###);
+            let (_docid, obkv) = index.documents(&rtxn, [12]).unwrap()[0];
+            let json = obkv_to_json(&[0, 1], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+            insta::assert_debug_snapshot!(json, @r###"
+            {
+                "id": Number(2),
+                "doggo": Number(4),
+            }
+            "###);
+            drop(rtxn);
+        }
+    }
+
+    #[test]
+    fn bug_3021_first() {
+        // https://github.com/meilisearch/meilisearch/issues/3021
+        let mut index = TempIndex::new();
+        index.index_documents_config.update_method = IndexDocumentsMethod::ReplaceDocuments;
+
+        index
+            .update_settings(|settings| {
+                settings.set_primary_key("primary_key".to_owned());
+            })
+            .unwrap();
+
+        index
+            .add_documents(documents!([
+                { "primary_key": 38 },
+                { "primary_key": 34 }
+            ]))
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, ]");
+        db_snap!(index, external_documents_ids, 1, @r###"
+        soft:
+        hard:
+        34                       1
+        38                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 1, @"[]");
+
+        let mut wtxn = index.write_txn().unwrap();
+        let mut delete = DeleteDocuments::new(&mut wtxn, &index).unwrap();
+        delete.delete_external_id("34");
+        delete.execute().unwrap();
+        wtxn.commit().unwrap();
+
+        db_snap!(index, documents_ids, @"[0, ]");
+        db_snap!(index, external_documents_ids, 2, @r###"
+        soft:
+        hard:
+        34                       1
+        38                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 2, @"[1, ]");
+
+        index
+            .update_settings(|s| {
+                s.set_searchable_fields(vec![]);
+            })
+            .unwrap();
+
+        // The key point of the test is to verify that the external documents ids
+        // do not contain any entry for previously soft-deleted document ids
+        db_snap!(index, documents_ids, @"[0, ]");
+        db_snap!(index, external_documents_ids, 3, @r###"
+        soft:
+        hard:
+        38                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 3, @"[]");
+
+        // So that this document addition works correctly now.
+        // It would be wrongly interpreted as a replacement before
+        index.add_documents(documents!({ "primary_key": 34 })).unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, ]");
+        db_snap!(index, external_documents_ids, 4, @r###"
+        soft:
+        hard:
+        34                       1
+        38                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 4, @"[]");
+
+        // We do the test again, but deleting the document with id 0 instead of id 1 now
+        let mut wtxn = index.write_txn().unwrap();
+        let mut delete = DeleteDocuments::new(&mut wtxn, &index).unwrap();
+        delete.delete_external_id("38");
+        delete.execute().unwrap();
+        wtxn.commit().unwrap();
+
+        db_snap!(index, documents_ids, @"[1, ]");
+        db_snap!(index, external_documents_ids, 5, @r###"
+        soft:
+        hard:
+        34                       1
+        38                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 5, @"[0, ]");
+
+        index
+            .update_settings(|s| {
+                s.set_searchable_fields(vec!["primary_key".to_owned()]);
+            })
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[1, ]");
+        db_snap!(index, external_documents_ids, 6, @r###"
+        soft:
+        hard:
+        34                       1
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 6, @"[]");
+
+        // And adding lots of documents afterwards instead of just one.
+        // These extra subtests don't add much, but it's better than nothing.
+        index.add_documents(documents!([{ "primary_key": 38 }, { "primary_key": 39 }, { "primary_key": 41 }, { "primary_key": 40 }, { "primary_key": 41 }, { "primary_key": 42 }])).unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, 2, 3, 4, 5, ]");
+        db_snap!(index, external_documents_ids, 7, @r###"
+        soft:
+        hard:
+        34                       1
+        38                       0
+        39                       2
+        40                       4
+        41                       3
+        42                       5
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 7, @"[]");
+    }
+
+    #[test]
+    fn bug_3021_second() {
+        // https://github.com/meilisearch/meilisearch/issues/3021
+        let mut index = TempIndex::new();
+        index.index_documents_config.update_method = IndexDocumentsMethod::UpdateDocuments;
+
+        index
+            .update_settings(|settings| {
+                settings.set_primary_key("primary_key".to_owned());
+            })
+            .unwrap();
+
+        index
+            .add_documents(documents!([
+                { "primary_key": 30 },
+                { "primary_key": 34 }
+            ]))
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, ]");
+        db_snap!(index, external_documents_ids, 1, @r###"
+        soft:
+        hard:
+        30                       0
+        34                       1
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 1, @"[]");
+
+        let mut wtxn = index.write_txn().unwrap();
+        let mut delete = DeleteDocuments::new(&mut wtxn, &index).unwrap();
+        delete.delete_external_id("34");
+        delete.execute().unwrap();
+        wtxn.commit().unwrap();
+
+        db_snap!(index, documents_ids, @"[0, ]");
+        db_snap!(index, external_documents_ids, 2, @r###"
+        soft:
+        hard:
+        30                       0
+        34                       1
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 2, @"[1, ]");
+
+        index
+            .update_settings(|s| {
+                s.set_searchable_fields(vec![]);
+            })
+            .unwrap();
+
+        // The key point of the test is to verify that the external documents ids
+        // do not contain any entry for previously soft-deleted document ids
+        db_snap!(index, documents_ids, @"[0, ]");
+        db_snap!(index, external_documents_ids, 3, @r###"
+        soft:
+        hard:
+        30                       0
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 3, @"[]");
+
+        // So that when we add a new document
+        index.add_documents(documents!({ "primary_key": 35, "b": 2 })).unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, ]");
+        // The external documents ids don't have several external ids pointing to the same
+        // internal document id
+        db_snap!(index, external_documents_ids, 4, @r###"
+        soft:
+        hard:
+        30                       0
+        35                       1
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 4, @"[]");
+
+        // And when we add 34 again, we don't replace document 35
+        index.add_documents(documents!({ "primary_key": 34, "a": 1 })).unwrap();
+
+        // And document 35 still exists, is not deleted
+        db_snap!(index, documents_ids, @"[0, 1, 2, ]");
+        db_snap!(index, external_documents_ids, 5, @r###"
+        soft:
+        hard:
+        30                       0
+        34                       2
+        35                       1
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 5, @"[]");
+
+        let rtxn = index.read_txn().unwrap();
+        let (_docid, obkv) = index.documents(&rtxn, [0]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1, 2], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "primary_key": Number(30),
+        }
+        "###);
+
+        // Furthermore, when we retrieve document 34, it is not the result of merging 35 with 34
+        let (_docid, obkv) = index.documents(&rtxn, [2]).unwrap()[0];
+        let json = obkv_to_json(&[0, 1, 2], &index.fields_ids_map(&rtxn).unwrap(), obkv).unwrap();
+        insta::assert_debug_snapshot!(json, @r###"
+        {
+            "primary_key": Number(34),
+            "a": Number(1),
+        }
+        "###);
+
+        drop(rtxn);
+
+        // Add new documents again
+        index
+            .add_documents(
+                documents!([{ "primary_key": 37 }, { "primary_key": 38 }, { "primary_key": 39 }]),
+            )
+            .unwrap();
+
+        db_snap!(index, documents_ids, @"[0, 1, 2, 3, 4, 5, ]");
+        db_snap!(index, external_documents_ids, 6, @r###"
+        soft:
+        hard:
+        30                       0
+        34                       2
+        35                       1
+        37                       3
+        38                       4
+        39                       5
+        "###);
+        db_snap!(index, soft_deleted_documents_ids, 6, @"[]");
     }
 }
