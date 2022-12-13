@@ -5,16 +5,16 @@ use std::io::{self, BufRead, BufReader, Cursor, Read, Seek};
 use std::num::ParseFloatError;
 use std::path::Path;
 
-use criterion::BenchmarkId;
 use milli::documents::{DocumentsBatchBuilder, DocumentsBatchReader};
 use milli::heed::EnvOpenOptions;
 use milli::update::{
     IndexDocuments, IndexDocumentsConfig, IndexDocumentsMethod, IndexerConfig, Settings,
 };
-use milli::{Filter, Index, Object, TermsMatchingStrategy};
+use milli::{CriterionImplementationStrategy, Filter, Index, Object, TermsMatchingStrategy};
 use serde_json::Value;
 
-pub struct Conf<'a> {
+#[derive(Clone)]
+pub struct IndexConf<'a> {
     /// where we are going to create our database.mmdb directory
     /// each benchmark will first try to delete it and then recreate it
     pub database_name: &'a str,
@@ -22,45 +22,66 @@ pub struct Conf<'a> {
     pub dataset: &'a str,
     /// The format of the dataset
     pub dataset_format: &'a str,
-    pub group_name: &'a str,
-    pub queries: &'a [&'a str],
+    /// primary key, if there is None we'll auto-generate docids for every documents
+    pub primary_key: Option<&'a str>,
+    /// configure your database as you want
+    pub configure: fn(&mut Settings),
+}
+
+impl IndexConf<'_> {
+    pub const BASE: Self = IndexConf {
+        database_name: "benches.mmdb",
+        dataset_format: "csv",
+        dataset: "",
+        primary_key: None,
+        configure: |_| (),
+    };
+}
+
+pub struct IndexSettingsConf<'a> {
     /// here you can change which criterion are used and in which order.
     /// - if you specify something all the base configuration will be thrown out
     /// - if you don't specify anything (None) the default configuration will be kept
     pub criterion: Option<&'a [&'a str]>,
-    /// the last chance to configure your database as you want
-    pub configure: fn(&mut Settings),
+}
+impl IndexSettingsConf<'_> {
+    pub const BASE: Self = IndexSettingsConf { criterion: None };
+}
+
+#[derive(Clone)]
+pub struct SearchBenchConf<'a> {
+    pub group_name: &'a str,
+    pub queries: Vec<&'a str>,
+    /// the implementation strategy used by the criteria
+    pub criterion_implementation_strategy: CriterionImplementationStrategy,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
     pub filter: Option<&'a str>,
     pub sort: Option<Vec<&'a str>>,
     /// enable or disable the optional words on the query
     pub optional_words: bool,
-    /// primary key, if there is None we'll auto-generate docids for every documents
-    pub primary_key: Option<&'a str>,
 }
 
-impl Conf<'_> {
-    pub const BASE: Self = Conf {
-        database_name: "benches.mmdb",
-        dataset_format: "csv",
-        dataset: "",
+impl SearchBenchConf<'_> {
+    pub const BASE: Self = SearchBenchConf {
         group_name: "",
-        queries: &[],
-        criterion: None,
-        configure: |_| (),
+        queries: vec![],
         filter: None,
         sort: None,
+        offset: None,
+        limit: None,
+        criterion_implementation_strategy: CriterionImplementationStrategy::Dynamic,
         optional_words: true,
-        primary_key: None,
     };
 }
 
-pub fn base_setup(conf: &Conf) -> Index {
-    match remove_dir_all(&conf.database_name) {
+pub fn base_setup_index(conf: &IndexConf) -> Index {
+    match remove_dir_all(conf.database_name) {
         Ok(_) => (),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
         Err(e) => panic!("{}", e),
     }
-    create_dir_all(&conf.database_name).unwrap();
+    create_dir_all(conf.database_name).unwrap();
 
     let mut options = EnvOpenOptions::new();
     options.map_size(100 * 1024 * 1024 * 1024); // 100 GB
@@ -75,14 +96,9 @@ pub fn base_setup(conf: &Conf) -> Index {
         builder.set_primary_key(primary_key.to_string());
     }
 
-    if let Some(criterion) = conf.criterion {
-        builder.reset_filterable_fields();
-        builder.reset_criteria();
-        builder.reset_stop_words();
-
-        let criterion = criterion.iter().map(|s| s.to_string()).collect();
-        builder.set_criteria(criterion);
-    }
+    builder.reset_filterable_fields();
+    builder.reset_criteria();
+    builder.reset_stop_words();
 
     (conf.configure)(&mut builder);
 
@@ -107,41 +123,68 @@ pub fn base_setup(conf: &Conf) -> Index {
     index
 }
 
-pub fn run_benches(c: &mut criterion::Criterion, confs: &[Conf]) {
-    for conf in confs {
-        let index = base_setup(conf);
+pub fn run_benches(
+    index_conf: IndexConf,
+    c: &mut criterion::Criterion,
+    confs: &[(IndexSettingsConf, Vec<SearchBenchConf>)],
+) {
+    let index = base_setup_index(&index_conf);
+    let file_name = Path::new(index_conf.dataset).file_name().and_then(|f| f.to_str()).unwrap();
 
-        let file_name = Path::new(conf.dataset).file_name().and_then(|f| f.to_str()).unwrap();
-        let name = format!("{}: {}", file_name, conf.group_name);
-        let mut group = c.benchmark_group(&name);
+    for (index_settings_conf, search_confs) in confs {
+        let mut wtxn = index.write_txn().unwrap();
+        let indexer_config = IndexerConfig::default();
+        let mut builder = Settings::new(&mut wtxn, &index, &indexer_config);
+        builder.reset_criteria();
+        if let Some(criterion) = index_settings_conf.criterion {
+            let criterion = criterion.iter().map(|s| s.to_string()).collect();
+            builder.set_criteria(criterion);
+        }
+        builder.execute(|_| (), || false).unwrap();
+        wtxn.commit().unwrap();
 
-        for &query in conf.queries {
-            group.bench_with_input(BenchmarkId::from_parameter(query), &query, |b, &query| {
+        for search_conf in search_confs {
+            let name = format!("{}: {}", file_name, search_conf.group_name);
+            let _bench_criterion = c.bench_function(&name, |b| {
                 b.iter(|| {
                     let rtxn = index.read_txn().unwrap();
                     let mut search = index.search(&rtxn);
-                    search.query(query).terms_matching_strategy(TermsMatchingStrategy::default());
-                    if let Some(filter) = conf.filter {
+                    search.terms_matching_strategy(TermsMatchingStrategy::default());
+                    if let Some(filter) = search_conf.filter {
                         let filter = Filter::from_str(filter).unwrap().unwrap();
                         search.filter(filter);
                     }
-                    if let Some(sort) = &conf.sort {
+                    if let Some(sort) = &search_conf.sort {
                         let sort = sort.iter().map(|sort| sort.parse().unwrap()).collect();
                         search.sort_criteria(sort);
                     }
-                    let _ids = search.execute().unwrap();
+                    if let Some(limit) = search_conf.limit {
+                        search.limit(limit);
+                    }
+                    if let Some(offset) = search_conf.offset {
+                        search.offset(offset);
+                    }
+                    search.criterion_implementation_strategy(
+                        search_conf.criterion_implementation_strategy,
+                    );
+                    if search_conf.queries.is_empty() {
+                        let _ids = search.execute().unwrap();
+                    } else {
+                        for &query in search_conf.queries.iter() {
+                            search.query(query);
+                            let _ids = search.execute().unwrap();
+                        }
+                    }
                 });
             });
         }
-        group.finish();
-
-        index.prepare_for_closing().wait();
     }
+    index.prepare_for_closing().wait();
 }
 
 pub fn documents_from(filename: &str, filetype: &str) -> DocumentsBatchReader<impl BufRead + Seek> {
-    let reader =
-        File::open(filename).expect(&format!("could not find the dataset in: {}", filename));
+    let reader = File::open(filename)
+        .unwrap_or_else(|_| panic!("could not find the dataset in: {}", filename));
     let reader = BufReader::new(reader);
     let documents = match filetype {
         "csv" => documents_from_csv(reader).unwrap(),
