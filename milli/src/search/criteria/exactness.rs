@@ -11,7 +11,9 @@ use crate::search::criteria::{
     InitialCandidates,
 };
 use crate::search::query_tree::{Operation, PrimitiveQueryPart};
-use crate::{absolute_from_relative_position, FieldId, Result};
+use crate::{
+    absolute_from_relative_position, bucketed_absolute_from_relative_position, FieldId, Result,
+};
 
 pub struct Exactness<'t> {
     ctx: &'t dyn Context<'t>,
@@ -285,30 +287,34 @@ fn attribute_start_with_docids(
 ) -> heed::Result<Vec<RoaringBitmap>> {
     let mut attribute_candidates_array = Vec::new();
     // start from attribute first position
-    let mut pos = absolute_from_relative_position(attribute_id, 0);
+    let mut relative_pos = 0;
     for part in query {
         use ExactQueryPart::*;
         match part {
             Synonyms(synonyms) => {
+                let bucketed_position =
+                    bucketed_absolute_from_relative_position(attribute_id, relative_pos);
                 let mut synonyms_candidates = RoaringBitmap::new();
                 for word in synonyms {
-                    let wc = ctx.word_position_docids(word, pos)?;
+                    let wc = ctx.word_position_docids(word, bucketed_position)?;
                     if let Some(word_candidates) = wc {
                         synonyms_candidates |= word_candidates;
                     }
                 }
                 attribute_candidates_array.push(synonyms_candidates);
-                pos += 1;
+                relative_pos += 1;
             }
             Phrase(phrase) => {
                 for word in phrase {
+                    let bucketed_position =
+                        bucketed_absolute_from_relative_position(attribute_id, relative_pos);
                     if let Some(word) = word {
-                        let wc = ctx.word_position_docids(word, pos)?;
+                        let wc = ctx.word_position_docids(word, bucketed_position)?;
                         if let Some(word_candidates) = wc {
                             attribute_candidates_array.push(word_candidates);
                         }
                     }
-                    pos += 1;
+                    relative_pos += 1;
                 }
             }
         }

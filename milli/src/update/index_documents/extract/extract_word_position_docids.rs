@@ -7,7 +7,9 @@ use super::helpers::{
 };
 use crate::error::SerializationError;
 use crate::index::db_name::DOCID_WORD_POSITIONS;
-use crate::{DocumentId, Result};
+use crate::{
+    bucketed_absolute_from_relative_position, relative_from_absolute_position, DocumentId, Result,
+};
 
 /// Extracts the word positions and the documents ids where this word appear.
 ///
@@ -37,9 +39,12 @@ pub fn extract_word_position_docids<R: io::Read + io::Seek>(
         let document_id = DocumentId::from_be_bytes(document_id_bytes);
 
         for position in read_u32_ne_bytes(value) {
+            let (field_id, relative) = relative_from_absolute_position(position);
+            let bucketed_position = bucketed_absolute_from_relative_position(field_id, relative);
+
             key_buffer.clear();
             key_buffer.extend_from_slice(word_bytes);
-            key_buffer.extend_from_slice(&position.to_be_bytes());
+            key_buffer.extend_from_slice(&bucketed_position.to_be_bytes());
 
             word_position_docids_sorter.insert(&key_buffer, document_id.to_ne_bytes())?;
         }
