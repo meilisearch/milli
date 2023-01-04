@@ -3,7 +3,8 @@ mod utils;
 
 use criterion::{criterion_group, criterion_main};
 use milli::update::Settings;
-use utils::Conf;
+use milli::CriterionImplementationStrategy;
+use utils::{IndexConf, IndexSettingsConf, SearchBenchConf};
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
@@ -16,114 +17,272 @@ fn base_conf(builder: &mut Settings) {
     builder.set_searchable_fields(searchable_fields);
 }
 
-#[rustfmt::skip]
-const BASE_CONF: Conf = Conf {
-    dataset: datasets_paths::SMOL_WIKI_ARTICLES,
-    queries: &[
-        "mingus ",        // 46 candidates
-        "miles davis ",   // 159
-        "rock and roll ", // 1007
-        "machine ",       // 3448
-        "spain ",         // 7002
-        "japan ",         // 10.593
-        "france ",        // 17.616
-        "film ",          // 24.959
-    ],
-    configure: base_conf,
-    ..Conf::BASE
-};
-
-fn bench_songs(c: &mut criterion::Criterion) {
-    let basic_with_quote: Vec<String> = BASE_CONF
-        .queries
-        .iter()
-        .map(|s| {
-            s.trim().split(' ').map(|s| format!(r#""{}""#, s)).collect::<Vec<String>>().join(" ")
-        })
-        .collect();
-    let basic_with_quote: &[&str] =
-        &basic_with_quote.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+fn bench_wiki(c: &mut criterion::Criterion) {
+    let index_conf: IndexConf = IndexConf {
+        dataset: datasets_paths::SMOL_WIKI_ARTICLES,
+        configure: base_conf,
+        ..IndexConf::BASE
+    };
 
     #[rustfmt::skip]
-    let confs = &[
-        /* first we bench each criterion alone */
-        utils::Conf {
-            group_name: "proximity",
-            queries: &[
-                "herald sings ",
-                "april paris ",
-                "tea two ",
-                "diesel engine ",
-            ],
-            criterion: Some(&["proximity"]),
-            optional_words: false,
-            ..BASE_CONF
-        },
-        utils::Conf {
-            group_name: "typo",
-            queries: &[
-                "migrosoft ",
-                "linax ",
-                "Disnaylande ",
-                "phytogropher ",
-                "nympalidea ",
-                "aritmetric ",
-                "the fronce ",
-                "sisan ",
-            ],
-            criterion: Some(&["typo"]),
-            optional_words: false,
-            ..BASE_CONF
-        },
-        utils::Conf {
-            group_name: "words",
-            queries: &[
-                "the black saint and the sinner lady and the good doggo ", // four words to pop, 27 results
-                "Kameya Tokujirō mingus monk ",                            // two words to pop, 55
-                "Ulrich Hensel meilisearch milli ",                        // two words to pop, 306
-                "Idaho Bellevue pizza ",                                   // one word to pop, 800
-                "Abraham machin ",                                         // one word to pop, 1141
-            ],
-            criterion: Some(&["words"]),
-            ..BASE_CONF
-        },
-        /* the we bench some global / normal search with all the default criterion in the default
-         * order */
-        utils::Conf {
-            group_name: "basic placeholder",
-            queries: &[""],
-            ..BASE_CONF
-        },
-        utils::Conf {
-            group_name: "basic without quote",
-            queries: &BASE_CONF
-                .queries
-                .iter()
-                .map(|s| s.trim()) // we remove the space at the end of each request
-                .collect::<Vec<&str>>(),
-            ..BASE_CONF
-        },
-        utils::Conf {
-            group_name: "basic with quote",
-            queries: basic_with_quote,
-            ..BASE_CONF
-        },
-        utils::Conf {
-            group_name: "prefix search",
-            queries: &[
-                "t", // 453k results
-                "c", // 405k
-                "g", // 318k
-                "j", // 227k
-                "q", // 71k
-                "x", // 17k
-            ],
-            ..BASE_CONF
-        },
+    let benches = vec![
+        // First all the benches done on the index with only the proximity criterion
+        (
+            IndexSettingsConf {
+                criterion: Some(&["proximity"]),
+            }, 
+            vec![      
+                SearchBenchConf {
+                    group_name: "proximity criterion",
+                    queries: vec![
+                        "herald sings ",
+                        "april paris ",
+                        "tea two ",
+                        "diesel engine ",
+                    ],
+                    optional_words: false,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "proximity criterion set-based",
+                    queries: vec![
+                        "herald sings ",
+                        "april paris ",
+                        "tea two ",
+                        "diesel engine ",
+                    ],
+                    optional_words: false,
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlySetBased, 
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "proximity criterion iterative",
+                    queries: vec![
+                        "herald sings ",
+                        "april paris ",
+                        "tea two ",
+                        "diesel engine ",
+                    ],
+                    optional_words: false,
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlyIterative, 
+                    ..SearchBenchConf::BASE
+                },
+            ]
+        ),
+        // Then all the benches done on the index with only the typo criterion
+        (
+            IndexSettingsConf {
+                criterion: Some(&["typo"]),
+            }, 
+            vec![   
+                SearchBenchConf {
+                    group_name: "typo criterion",
+                    queries: vec![
+                        "migrosoft ",
+                        "linax ",
+                        "Disnaylande ",
+                        "phytogropher ",
+                        "nympalidea ",
+                        "aritmetric ",
+                        "the fronce ",
+                        "sisan ",
+                    ],
+                    optional_words: false,
+                    ..SearchBenchConf::BASE
+                },
+            ]
+        ),
+        // Then all the benches done on the index with only the words criterion
+        (
+            IndexSettingsConf {
+                criterion: Some(&["words"]),
+            }, 
+            vec![   
+                SearchBenchConf {
+                    group_name: "words criterion",
+                    queries: vec![
+                        "the black saint and the sinner lady and the good doggo ", // four words to pop, 27 results
+                        "Kameya Tokujirō mingus monk ",                            // two words to pop, 55
+                        "Ulrich Hensel meilisearch milli ",                        // two words to pop, 306
+                        "Idaho Bellevue pizza ",                                   // one word to pop, 800
+                        "Abraham machin ",                                         // one word to pop, 1141
+                    ],
+                    ..SearchBenchConf::BASE
+                }
+            ]
+        ),
+
+        // /* the we bench some global / normal search with all the default criterion in the default
+        //  * order */
+        (
+            IndexSettingsConf::BASE,
+            vec![
+                SearchBenchConf {
+                    group_name: "basic placeholder",
+                    queries: vec![""],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "basic without quote",
+                    queries: vec![
+                        "mingus ",
+                        "miles davis ",
+                        "rock and roll ",
+                        "machine ",
+                        "spain ",
+                        "japan ",
+                        "france ",
+                        "film ",
+                        "the black saint and the sinner lady and the",
+                    ],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "basic without quote set-based",
+                    queries: vec![
+                        "mingus",
+                        "miles davis",
+                        "rock and roll",
+                        "machine",
+                        "spain",
+                        "japan",
+                        "france",
+                        "film",
+                        "the black saint and the sinner lady and the",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlySetBased,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "basic with quote",
+                    queries: vec![
+                        "\"mingus\"",
+                        "\"miles davis\"",
+                        "\"rock and roll\"",
+                        "\"machine\"",
+                        "\"spain\"",
+                        "\"japan\"",
+                        "\"france\"",
+                        "\"film\"",
+                        "\"the black saint and the sinner lady\" and the",
+                    ],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "prefix search",
+                    queries: vec![
+                        "t",
+                        "c",
+                        "g",
+                        "j",
+                        "q",
+                        "x",
+                    ],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "prefix search set-based",
+                    queries: vec![
+                        "t",
+                        "c",
+                        "g",
+                        "j",
+                        "q",
+                        "x",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlySetBased,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "prefix search iterative",
+                    queries: vec![
+                        "t",
+                        "c",
+                        "g",
+                        "j",
+                        "q",
+                        "x",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlyIterative,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "words + prefix search",
+                    queries: vec![
+                        "the love of a new f",
+                        "aesthetic sense of w",
+                        "aesthetic sense of wo",
+                        "once upon a time in ho",
+                        "once upon a time in hol",
+                        "once upon a time in hollywood a",
+                        "belgium ardennes festival l",
+                    ],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "words + prefix search set-based",
+                    queries: vec![
+                        "the love of a new f",
+                        "aesthetic sense of w",
+                        "aesthetic sense of wo",
+                        "once upon a time in ho",
+                        "once upon a time in hol",
+                        "once upon a time in hollywood a",
+                        "belgium ardennes festival l",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlySetBased,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "words + prefix search iterative",
+                    queries: vec![
+                        "the love of a new f",
+                        "aesthetic sense of w",
+                        "aesthetic sense of wo",
+                        "once upon a time in ho",
+                        "once upon a time in hol",
+                        "once upon a time in hollywood a",
+                        "belgium ardennes festival l",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlyIterative,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "10x 'a' or 'b'",
+                    queries: vec![
+                        "a a a a a a a a a a",
+                        "b b b b b b b b b b",
+                    ],
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "10x 'a' or 'b' - set-based",
+                    queries: vec![
+                        "a a a a a a a a a a",
+                        "b b b b b b b b b b",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlySetBased,
+                    ..SearchBenchConf::BASE
+                },
+                SearchBenchConf {
+                    group_name: "10x 'a' or 'b' - iterative",
+                    queries: vec![
+                        "a a a a a a a a a a",
+                        "b b b b b b b b b b",
+                    ],
+                    criterion_implementation_strategy: CriterionImplementationStrategy::OnlyIterative,
+                    ..SearchBenchConf::BASE
+                },
+            ] 
+        )
     ];
 
-    utils::run_benches(c, confs);
+    utils::run_benches(index_conf, c, &benches);
 }
 
-criterion_group!(benches, bench_songs);
+criterion_group!(
+    name = benches;
+    config = { criterion::Criterion::default().sample_size(10) };
+    targets = bench_wiki
+);
 criterion_main!(benches);
