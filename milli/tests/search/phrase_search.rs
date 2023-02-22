@@ -40,7 +40,8 @@ fn test_phrase_search_with_stop_words_given_criteria(criteria: &[Criterion]) {
     search.authorize_typos(false);
     search.terms_matching_strategy(TermsMatchingStrategy::All);
     let result = search.execute().unwrap();
-    assert_eq!(result.documents_ids.len(), 0);
+    // act like a placeholder search
+    assert_eq!(result.documents_ids.len(), 10);
 }
 
 #[test]
