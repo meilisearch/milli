@@ -100,6 +100,27 @@ pub fn absolute_from_relative_position(field_id: FieldId, relative: RelativePosi
     (field_id as u32) << 16 | (relative as u32)
 }
 
+/// Compute the "bucketed" absolute position from the field id and relative position in the field.
+///
+/// In a bucketed position, the accuracy of the relative position is reduced exponentially as it gets larger.
+pub fn bucketed_absolute_from_relative_position(
+    field_id: FieldId,
+    relative: RelativePosition,
+) -> Position {
+    // The first few relative positions are kept intact.
+    if relative < 16 {
+        absolute_from_relative_position(field_id, relative)
+    } else if relative < 24 {
+        // Relative positions between 16 and 24 all become equal to 24
+        absolute_from_relative_position(field_id, 24)
+    } else {
+        // Then, groups of positions that have the same base-2 logarithm are reduced to
+        // the same relative position: the smallest power of 2 that is greater than them
+        let relative = (relative as f64).log2().ceil().exp2() as u16;
+        absolute_from_relative_position(field_id, relative)
+    }
+}
+
 /// Transform a raw obkv store into a JSON Object.
 pub fn obkv_to_json(
     displayed_fields: &[FieldId],
@@ -328,5 +349,52 @@ mod tests {
         let actual = all_obkv_to_json(obkv, &fields_ids_map).unwrap();
 
         assert_eq!(&actual, expected);
+    }
+
+    #[test]
+    fn bucketed_position() {
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 0), @"0");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 1), @"1");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 2), @"2");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 15), @"15");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 16), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 19), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 20), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 21), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 22), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 23), @"24");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 24), @"32");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 25), @"32");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 30), @"32");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 40), @"64");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 50), @"64");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 60), @"64");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 70), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 80), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 90), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 100), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 110), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 120), @"128");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 130), @"256");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 1000), @"1024");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 2000), @"2048");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 4000), @"4096");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 8000), @"8192");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 9000), @"16384");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 10_000), @"16384");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 65_500), @"65535");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(0, 65_535), @"65535");
+
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(1, 0), @"65536");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(1, 1), @"65537");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(1, 20), @"65560");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(1, 1000), @"66560");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(1, 65_535), @"131071");
+
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(2, 0), @"131072");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(2, 65_535), @"196607");
+
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(65_535, 0), @"4294901760");
+        insta::assert_debug_snapshot!(bucketed_absolute_from_relative_position(65_535, 65_535), @"4294967295");
     }
 }
