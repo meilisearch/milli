@@ -38,6 +38,7 @@
 //! field = _geoRadius(12, 13, 14)
 //! ```
 //!
+#![feature(anonymous_lifetime_in_impl_trait)]
 
 mod condition;
 mod error;

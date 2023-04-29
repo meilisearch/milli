@@ -16,5 +16,5 @@ milli/target/
 ## ... unreviewed
 *.snap.new
 
-# Fuzzcheck data for the facet indexing fuzz test
-milli/fuzz/update::facet::incremental::fuzz::fuzz/
+# Fuzzcheck data
+milli/fuzz/*

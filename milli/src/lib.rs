@@ -1,4 +1,4 @@
-#![cfg_attr(all(test, fuzzing), feature(no_coverage))]
+#![cfg_attr(all(test, fuzzing), feature(no_coverage, once_cell))]
 #[macro_use]
 pub mod documents;
 
